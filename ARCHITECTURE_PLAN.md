@@ -1,6 +1,8 @@
-# Boundary Solidification Plan
+# Filesystem Plugin Architecture Plan
 
 Status: migration started
+
+Decision: RetroArch Overlay is a blank application harness. Every game integration is a standalone Git repository loaded directly from the filesystem. Plugin installation and updates use Git only; Python package publication, wheel distribution, `pipx` injection, namespace packages, and Python entry points are outside the design.
 
 Implemented in the first slice:
 
@@ -8,34 +10,38 @@ Implemented in the first slice:
 - shared keyring credential store under `infrastructure`
 - Tk API-key prompt under `presentation/tk`
 - RA HTTP/config implementation under `infrastructure`
-- validated sibling-folder plugin discovery with isolated failures
+- an initial internal sibling-folder discovery prototype with isolated failures; this must be replaced by external repository discovery
 - architecture tests for the first game/core import rules
 - hash-driven, public-Web-API achievement research export with offline saved-page memory-note import
 
-Still pending: moving the real game packages and assets, switching production bootstrap to discovery, generic map documents, controller/UI separation, and removal of compatibility modules.
+Still pending: extracting both games into standalone repositories, switching production bootstrap to external filesystem discovery, lazy construction, generic map documents, controller/UI separation, and removal of compatibility modules.
 
 ## Goal
 
-Turn RetroArch Overlay into a stable application harness around self-contained game packages.
+Turn RetroArch Overlay into a stable blank harness around selectively cloned, self-contained game plugin repositories.
 
 The defining acceptance rule is:
 
-> Adding a built-in game requires one new sibling folder under `src/retroarch_overlay/games/` and no edits to `main.py`, shared UI code, the registry, packaging configuration, or a central game list.
+> Adding a game requires cloning one standalone Git repository into a discovered plugin directory. It requires no edits to `main.py`, shared UI code, the registry, project metadata, or a central game list.
 
-All source-controlled game knowledge must live in that folder. This includes ROM identity, RAM addresses, state decoders, achievement IDs, progression rules, maps, images, patches, fixtures, and game-specific setup options.
+All source-controlled game knowledge must live in that plugin repository. This includes ROM identity, RAM addresses, state decoders, achievement IDs, progression rules, maps, images, patches, fixtures, game-specific setup options, and any pinned decomp submodules.
 
 ## Architectural Decisions
 
-1. Rename the game extension area from `adapters/` to `games/`. A game package is a complete vertical slice, not only a memory adapter.
-2. Discover built-in games by scanning sibling packages under `retroarch_overlay.games`. Do not maintain named imports or a central registry list.
-3. Import only each game's lightweight `plugin.py` during discovery. Construct the adapter lazily after its manifest matches the running content.
-4. Keep all communication between a game and the application in shared, immutable data contracts.
-5. Keep Tk, sockets, HTTP, keyring, filesystem search, and command-line parsing out of game domain modules.
-6. Keep every source-controlled asset inside the owning game package and load it with `importlib.resources`.
-7. Treat large external source trees, such as `pokeemerald`, as optional providers rather than application source.
-8. A missing or broken optional game must not prevent other games from starting.
-9. Preserve compatibility imports during migration, then remove them after all callers use the new package paths.
-10. Enforce these boundaries with automated architecture tests rather than relying only on documentation.
+1. The main repository contains no games. It provides only the application harness, contracts, infrastructure, generic presentation, filesystem plugin discovery, and diagnostics.
+2. Each game plugin is a standalone Git repository. A plugin repository is a complete vertical slice, not only a memory adapter.
+3. Discover plugins by scanning configured filesystem directories for repository roots containing `plugin.toml` and `plugin.py`. Do not maintain named imports or a central registry list.
+4. Load each plugin's lightweight `plugin.py` in an isolated module namespace derived from its manifest ID. Construct the adapter lazily only after its manifest matches active content.
+5. The default plugin directory is `<core-repository>/plugins/`. It is ignored by the core repository so each child remains independently versioned. Additional roots may be supplied with repeatable `--plugin-dir` arguments.
+6. Git is the plugin installation and update mechanism. The harness does not clone, install, update, or delete plugin repositories automatically.
+7. A plugin may pin a game decomp under `vendor/` as a Git submodule. `git clone --recurse-submodules` is the standard acquisition path for such plugins.
+8. A plugin import must not require its submodules. Submodule/data validation occurs only when matching content causes lazy adapter construction.
+9. Keep all communication between a plugin and the application in shared, immutable data contracts.
+10. Keep Tk, sockets, HTTP, keyring, filesystem search, and command-line parsing out of plugin domain modules.
+11. Keep every source-controlled game asset inside the owning plugin repository and resolve it relative to that repository root.
+12. A missing, incomplete, or broken plugin must not prevent the blank harness or another plugin from starting.
+13. Preserve compatibility imports during extraction, then remove all game code from the core repository.
+14. Enforce these boundaries with automated architecture and plugin contract tests rather than relying only on documentation.
 
 ## Target Dependency Direction
 
@@ -45,9 +51,11 @@ flowchart TD
     App --> Core[core contracts and models]
     App --> Infra[infrastructure services]
     App --> UI[presentation/tk]
-    App --> Discovery[games discovery]
-    Discovery --> Plugin[games/game_slug/plugin.py]
-    Plugin --> Game[game package internals]
+    App --> Discovery[filesystem plugin discovery]
+    Discovery --> Manifest[plugin repo: plugin.toml]
+    Discovery --> Plugin[plugin repo: plugin.py]
+    Plugin --> Game[plugin repository internals]
+    Game --> Vendor[optional vendor/decomp submodules]
     Game --> Core
     Game --> ServiceContracts[service protocols]
     Infra --> Core
@@ -56,120 +64,59 @@ flowchart TD
 
 The following imports are forbidden:
 
-- `core` importing `app`, `infrastructure`, `presentation`, or `games`.
-- `infrastructure` importing `presentation` or any game package.
-- `presentation` importing a named game package.
-- `app` importing a named game package.
-- One game package importing another game package.
-- A game package importing Tk, Pillow, keyring, socket, or HTTP clients.
+- `core` importing `app`, `infrastructure`, `presentation`, or plugin code.
+- `infrastructure` importing `presentation` or any plugin repository.
+- `presentation` importing a named plugin.
+- `app` importing a named plugin.
+- One plugin importing another plugin.
+- A plugin importing Tk, keyring, socket, or application HTTP implementations.
 - Shared code containing a path to a named game's assets.
+- The core repository containing a ROM hash, memory address, achievement ID, map calibration, game title alias, or decomp rule.
 
 ## Target Project Layout
 
 ```text
-src/retroarch_overlay/
-    __init__.py
-    main.py
-
-    app/
+RetroArchOverlay/                         # main/core Git repository
+    .git/
+    .gitignore                            # ignores plugins/*
+    ARCHITECTURE_PLAN.md
+    plugins/                              # discovery root, not tracked by core
+        RetroArchOverlay-Emerald/         # independent Git repository
+        RetroArchOverlay-DragonWarrior3/  # independent Git repository
+    src/retroarch_overlay/
         __init__.py
-        bootstrap.py
-        controller.py
-        options.py
-        diagnostics.py
-
-    core/
-        __init__.py
-        contracts.py
-        errors.py
-        models.py
-        presentation.py
-
-    infrastructure/
-        __init__.py
-        content_hashes.py
-        retroarch.py
-        retroachievements.py
-        credentials.py
-        app_paths.py
-
-    presentation/
-        __init__.py
-        tk/
-            __init__.py
-            overlay.py
-            details.py
-            maps.py
+        main.py
+        app/
+            bootstrap.py
+            controller.py
+            options.py
+            diagnostics.py
+        core/
+            contracts.py
+            errors.py
+            models.py
+            presentation.py
+        infrastructure/
+            content_hashes.py
+            plugin_loader.py
+            retroarch.py
+            retroachievements.py
             credentials.py
-
-    games/
-        __init__.py
-        discovery.py
-
-        dragon_warrior_3/
-            __init__.py
-            plugin.py
-            manifest.py
-            adapter.py
-            state.py
-            memory.py
-            presenter.py
-            tracker.py
-            achievements.py
-            knowledge.py
-            data/
-                locations.json
-                progression.json
-            assets/
-                maps/
-                    world.png
-                    underworld.png
-                    SOURCE.md
-            tests/
-                test_memory.py
-                test_presenter.py
-                test_plugin.py
-                fixtures.py
-
-        emerald/
-            __init__.py
-            plugin.py
-            manifest.py
-            adapter.py
-            state.py
-            memory.py
-            presenter.py
-            tracker.py
-            achievements.py
-            battle.py
-            feebas.py
-            decomp.py
-            knowledge.py
-            decomp.lock.json
-            data/
-            assets/
-                patches/
-                    professor_oak_challenge/
-            tests/
-                test_memory.py
-                test_presenter.py
-                test_battle.py
-                test_feebas.py
-                test_plugin.py
-                fixtures/
-
-tests/
-    architecture/
-        test_dependencies.py
-        test_game_discovery.py
-        test_game_package_contract.py
-        test_packaged_assets.py
-    app/
-    infrastructure/
-    presentation/
+            app_paths.py
+        presentation/
+            tk/
+                overlay.py
+                details.py
+                maps.py
+                credentials.py
+    tests/
+        architecture/
+        app/
+        infrastructure/
+        presentation/
 ```
 
-Not every game must use every optional file. The folder contract defines responsibilities, not mandatory empty modules.
+The `plugins/` children shown above are separate repositories, not tracked directories or submodules of the core repository. The core repository remains useful and runnable when `plugins/` is empty or absent.
 
 ## Shared Boundary Responsibilities
 
@@ -233,38 +180,65 @@ Infrastructure implements core protocols. It must not contain game IDs, ROM hash
 
 The renderer may style a semantic state such as `alert`, `complete`, or `unavailable`. It must not branch on a game slug, game title, map ID, item ID, or achievement ID.
 
-### Games
+### Plugins
 
-Each `games/<slug>/` package owns one game's complete behavior and source-controlled data. It may import core contracts and service protocols, but not service implementations or Tk widgets.
+Each standalone plugin repository owns one game's complete behavior and source-controlled data. It may import core contracts and service protocols exposed through the plugin context, but not service implementations or Tk widgets.
 
-## Game Package Contract
+## Plugin Repository Contract
 
-### Required Files
+### Repository Layout
 
-Each game folder must contain:
+Every plugin repository follows this shape:
 
-- `__init__.py`: empty or a minimal public re-export.
-- `plugin.py`: the only module loaded by generic discovery.
-- `manifest.py`: lightweight identity and capability metadata.
-- `adapter.py`: orchestration between memory decoding, tracking, and presentation.
-- `tests/test_plugin.py`: contract and construction tests.
+```text
+RetroArchOverlay-<Game>/
+    .git/
+    .gitignore
+    .gitmodules                         # only when the plugin uses submodules
+    LICENSE.md
+    README.md
+    plugin.toml                         # parsed without executing Python
+    plugin.py                           # lightweight adapter factory
+    game/
+        __init__.py
+        adapter.py
+        state.py
+        memory.py
+        presenter.py
+        tracker.py
+        achievements.py
+        knowledge.py
+        data/
+        assets/
+    tests/
+        test_plugin.py
+        test_memory.py
+        test_presenter.py
+        fixtures/
+    vendor/
+        <optional-decomp-submodule>/
+```
 
-### Optional Responsibility Modules
+Only `plugin.toml`, `plugin.py`, `game/`, and `tests/test_plugin.py` are structurally required. Other files and folders exist when the game needs them.
 
-- `state.py`: immutable typed state objects.
-- `memory.py`: RAM/SRAM addresses, validation, and byte decoding.
-- `presenter.py`: game state plus knowledge to shared presentation documents.
-- `tracker.py`: differences between snapshots and session-only observations.
-- `knowledge.py`: small authored facts represented as typed Python data.
-- `achievements.py`: achievement catalog and game-specific detectors.
-- `data/`: larger authored JSON or binary tables.
-- `assets/`: maps, patches, images, and source/license metadata.
+### Responsibility Modules
+
+- `plugin.py`: lightweight factory and plugin boundary implementation.
+- `game/state.py`: immutable typed state objects.
+- `game/memory.py`: RAM/SRAM addresses, validation, and byte decoding.
+- `game/presenter.py`: game state plus knowledge to shared presentation documents.
+- `game/tracker.py`: differences between snapshots and session-only observations.
+- `game/knowledge.py`: small authored facts represented as typed Python data.
+- `game/achievements.py`: achievement catalog and game-specific detectors.
+- `game/data/`: larger authored JSON or binary tables.
+- `game/assets/`: maps, patches, images, and source/license metadata.
 - `tests/fixtures/`: compact memory and external-data fixtures.
+- `vendor/`: Git submodules for decomps or other upstream source trees.
 
 ### Internal Dependency Direction
 
 ```text
-plugin -> adapter -> memory -> state
+plugin.py -> game/adapter -> game/memory -> game/state
                   -> tracker -> state
                   -> presenter -> state + knowledge + core presentation models
 knowledge -> data files
@@ -273,77 +247,157 @@ presenter -> achievements
 
 `memory.py` must not produce display strings or `PanelSection` objects. `presenter.py` must not read raw memory. `knowledge.py` must not perform network or emulator I/O. `adapter.py` should coordinate these pieces and remain small.
 
-## Plugin Contract
+## Manifest and Plugin Contracts
 
-The exact names may change during implementation, but the semantic contract should be equivalent to:
+### `plugin.toml`
+
+Discovery parses `plugin.toml` with the standard-library `tomllib` module before importing Python. A representative manifest is:
+
+```toml
+schema_version = 1
+plugin_id = "org.jeschete.retroarch-overlay.emerald"
+slug = "emerald"
+name = "Pokemon Emerald"
+api_version = 1
+entry = "plugin.py"
+ra_game_id = 668
+
+[match]
+cores = ["mgba", "game_boy_advance"]
+content_hints = ["emerald"]
+hashes = ["31446456df04356cb9f2145bada42ed2"]
+
+[[options]]
+key = "emerald.pokeemerald_root"
+flag = "--emerald-pokeemerald-root"
+type = "path"
+required = false
+
+[[sources]]
+id = "pokeemerald"
+kind = "git-submodule"
+path = "vendor/pokeemerald"
+required = true
+required_files = [
+    "src/data/wild_encounters.json",
+    "data/maps/map_groups.json",
+]
+```
+
+Manifest rules:
+
+- `plugin_id` is globally stable and must not depend on the checkout folder name.
+- `slug` namespaces settings, cache entries, diagnostics, and synthetic module names.
+- `api_version` must match a core-supported plugin contract version.
+- `entry` must remain inside the repository root after path resolution.
+- Match metadata must be sufficient to select a plugin without importing it.
+- Source declarations describe generic preflight checks; game-specific semantic validation remains in plugin code.
+- Unknown schema or API versions make the plugin unavailable, not fatal to the harness.
+
+### `plugin.py`
+
+After a manifest matches active content, the loader imports `plugin.py` under an isolated synthetic module namespace. This is an in-process import detail, not installation or package management. Its semantic contract is:
 
 ```python
-@dataclass(frozen=True, slots=True)
-class GameManifest:
-    slug: str
-    display_name: str
-    ra_game_id: int | None
-    supported_cores: frozenset[str]
-    content_hints: tuple[str, ...]
-    content_hashes: frozenset[str]
-    capabilities: frozenset[str]
-
-
 class GamePlugin(Protocol):
-    manifest: GameManifest
-    options: tuple[GameOptionSpec, ...]
-
-    def supports(
-        self,
-        status: RetroArchStatus,
-        content_hash: str | None,
-    ) -> bool: ...
-
     def create(
         self,
         context: GameContext,
-        settings: Mapping[str, object],
     ) -> GameAdapter: ...
+
+
+PLUGIN: GamePlugin
 ```
 
-Each game exports one module-level `PLUGIN` object from `plugin.py`.
+`GameContext` provides the repository root, resolved namespaced settings, shared service protocols, and lazy RA progress access. It does not expose Tk widgets or infrastructure implementations.
 
 Rules for `plugin.py`:
 
 - Import must be cheap and side-effect free.
-- Do not read game data, contact RA, inspect ROM directories, or construct the adapter at import time.
+- Do not validate submodules, parse game data, contact RA, inspect ROM directories, or construct the adapter at import time.
 - Import heavy game internals inside `create()`.
-- All CLI/config needs are declared through `options`.
-- Option keys are namespaced by slug in the resolved settings map.
+- Read options and source requirements from the supplied context; declarations live in `plugin.toml`.
+- Resolve files relative to `context.repository_root`, never the process working directory or core repository.
+- Do not mutate `sys.path` globally.
+- Do not import another plugin repository.
 
 ## Discovery and Adapter Lifecycle
 
-1. `games.discovery` scans `retroarch_overlay.games.__path__` with `pkgutil.iter_modules`.
-2. It ignores packages beginning with `_` and imports `<package>.plugin`.
-3. It validates the exported `PLUGIN` and manifest.
-4. It rejects duplicate slugs, conflicting option names, and invalid manifests.
-5. The application asks each lightweight plugin whether it supports the active status/hash.
-6. Only the matching plugin is constructed.
-7. The constructed adapter is cached by slug for the process lifetime so session tracking survives polling.
-8. If construction raises `GameUnavailableError`, the registry records the reason and continues operating.
-9. A later retry can reconstruct the adapter after configuration or external data becomes available.
+1. Resolve discovery roots from the core-relative default `plugins/`, repeatable `--plugin-dir` arguments, and persisted application configuration.
+2. Scan only immediate child directories of each discovery root. Do not recursively execute arbitrary Python files.
+3. Treat a child as a candidate only when it contains `plugin.toml`.
+4. Parse and validate manifests without importing Python.
+5. Reject duplicate `plugin_id` values, duplicate slugs, conflicting option flags, path escapes, unsupported API versions, and malformed manifests.
+6. Record every invalid candidate in diagnostics and continue discovering siblings.
+7. Poll RetroArch and resolve the active content hash.
+8. Rank manifest matches: exact hash first, then explicit core plus content hints. Ambiguous matches are reported rather than resolved by directory order.
+9. Only after a match, preflight required submodule paths and import that repository's `plugin.py`.
+10. Load it under a synthetic module namespace derived from the manifest slug and plugin ID so relative imports work without modifying global import paths.
+11. Validate the exported `PLUGIN`, construct it with `GameContext`, and cache the adapter by plugin ID for the process lifetime.
+12. If import or construction raises `GameUnavailableError`, record the reason and keep the harness operational.
+13. Allow an explicit retry after configuration or submodules become available.
+14. When active content changes, retain cached adapters but activate only the newly matching one.
 
-External Python packages can continue using entry points. Built-in folder discovery and third-party entry-point discovery should feed the same validated plugin catalog.
+No Python entry-point discovery, package metadata, package installation, or plugin import from `site-packages` is part of this design.
+
+## Plugin Repository Location
+
+The normal checkout layout is:
+
+```text
+C:/Projects/Personal/RetroArchOverlay/                       # core repo
+C:/Projects/Personal/RetroArchOverlay/plugins/
+C:/Projects/Personal/RetroArchOverlay/plugins/RetroArchOverlay-Emerald/   # plugin repo
+```
+
+Example acquisition:
+
+```powershell
+git clone https://github.com/JEschete/RetroArchOverlay.git
+git clone --recurse-submodules `
+    https://github.com/JEschete/RetroArchOverlay-Emerald.git `
+    .\RetroArchOverlay\plugins\RetroArchOverlay-Emerald
+```
+
+The core repository ignores everything under `plugins/` except an optional placeholder/readme. It never treats plugin repositories as its own submodules.
+
+Additional repositories may live elsewhere:
+
+```powershell
+python .\src\retroarch_overlay\main.py `
+    --plugin-dir D:\RetroArchOverlayPlugins
+```
+
+`--plugin-dir` points to a discovery root whose immediate children are plugin repositories. It is repeatable. A future `--plugin-repo` option may target one repository directly, but implicit recursive filesystem scanning is prohibited.
+
+## Repository Ownership
+
+The intended repository topology is:
+
+```text
+JEschete/RetroArchOverlay                  # blank core harness
+JEschete/RetroArchOverlay-DragonWarrior3  # one game plugin
+JEschete/RetroArchOverlay-Emerald         # one game plugin plus pokeemerald submodule
+```
+
+Each repository has its own history, issues, releases, tests, license, and update cadence. The core repository does not aggregate plugin source through Git submodules. A plugin may aggregate only the upstream decomps or data sources that it directly owns as dependencies.
 
 ## Configuration Boundary
 
-`main.py` must expose only application-wide options such as host, port, opacity, ROM roots, config path, and diagnostics.
+`main.py` must expose only application-wide options such as host, port, opacity, ROM roots, plugin discovery roots, config path, and diagnostics.
 
-Game options are declared inside each plugin with `GameOptionSpec`. The app translates those declarations into CLI arguments and resolved settings. For example, Emerald owns its decomp-root option; `main.py` does not contain `pokeemerald` or import `EmeraldAdapter`.
+Game options are declared in each repository's `plugin.toml`. After manifest discovery, the app translates those declarations into CLI arguments and resolved settings. For example, the Emerald repository owns its decomp-root override; `main.py` does not contain `pokeemerald`, an Emerald option, or an Emerald import.
 
 Configuration precedence should be:
 
 1. explicit CLI option
 2. environment variable
 3. user configuration file
-4. plugin default
+4. manifest default
 
 Use stable namespaced keys such as `emerald.decomp_root`. Validate generic types in the application and game-specific semantics in the plugin.
+
+The shared application configuration may remember plugin discovery roots, but it must not contain a list of known plugin IDs. Discoverability comes from the filesystem on each launch.
 
 ## Presentation and Action Boundary
 
@@ -366,9 +420,9 @@ MapDocument
     viewport
 ```
 
-Games construct these shared documents. The Tk layer decides how to render them. Do not allow games to pass callables, Tk classes, or arbitrary widget factories through the contract.
+Plugins construct these shared documents. The Tk layer decides how to render them. Do not allow plugins to pass callables, Tk classes, or arbitrary widget factories through the contract.
 
-The existing Dragon Warrior III map window must become a generic map renderer. The following currently game-specific UI facts move into the Dragon Warrior III package:
+The existing Dragon Warrior III map window must become a generic map renderer. The following currently game-specific UI facts move into the Dragon Warrior III repository:
 
 - world and underworld image references
 - map titles
@@ -377,7 +431,7 @@ The existing Dragon Warrior III map window must become a generic map renderer. T
 - initial layer selection
 - indoor-map fallback text, if it is game-specific
 
-The generic renderer receives already-calculated marker and viewport data. It does not import the game package or inspect the game name.
+The generic renderer receives already-calculated marker and viewport data. It does not import the plugin or inspect the game name.
 
 ## Game Data and Asset Policy
 
@@ -393,35 +447,84 @@ Game-specific data includes:
 - images, patches, and source attribution
 - test fixtures containing game-specific memory layouts
 
-All of it belongs under `games/<slug>/`.
+All of it belongs inside the owning standalone plugin repository.
 
 Specific moves:
 
-- `resources/dragon_warrior_3/*` to `games/dragon_warrior_3/assets/maps/`.
-- `resources/24186-PokemonEmerald-Subset-POC/*` to `games/emerald/assets/patches/professor_oak_challenge/`.
+- `resources/dragon_warrior_3/*` to `RetroArchOverlay-DragonWarrior3/game/assets/maps/`.
+- `resources/24186-PokemonEmerald-Subset-POC/*` to `RetroArchOverlay-Emerald/game/assets/patches/professor_oak_challenge/`.
 - Dragon Warrior III map loading and calibration out of `ui.py`.
 - Emerald's `--pokeemerald-root` declaration out of `main.py`.
 - All RA game IDs out of `main.py` and into manifests.
 - Game-specific examples in shared protocol tests replaced with neutral example names.
 
-Use `importlib.resources.files(package).joinpath(...)` through a shared asset resolver. Do not derive package resources from repository-relative paths.
+The loader supplies an absolute, validated `repository_root` in `GameContext`. Plugins resolve `game/data`, `game/assets`, and `vendor` paths from that root. Paths declared in manifests are normalized and rejected if they escape the repository root.
 
-Packaging configuration must use a generic package-data pattern that includes standardized `data/` and `assets/` contents for every game. Adding a game must not require a new `pyproject.toml` entry. A wheel-content test must verify that every plugin-declared asset is present after building and installing the wheel.
+No plugin asset is copied into the core repository or a Python installation. Git tracks assets in the plugin repository, and normal filesystem reads load them in place. Each plugin owns attribution and license documentation for its assets and vendored sources.
 
 ## External Data Policy
 
-The full `pokeemerald` checkout should not be a mandatory submodule.
+Decomps and similar upstream source trees belong to the plugin that consumes them. When a game has a suitable decomp, the plugin repository pins it as a Git submodule under `vendor/`.
 
-Recommended approach:
+Emerald's expected repository layout is:
 
-- Store a small `decomp.lock.json` in `games/emerald/` containing the expected repository URL, commit, and compatible data schema/version.
-- Resolve an explicit `emerald.decomp_root` first.
-- Otherwise use a generic application-data location supplied by `AppPaths`, such as `%LOCALAPPDATA%/RetroArchOverlay/sources/emerald/pokeemerald` on Windows.
-- Validate required files and, when possible, the pinned commit.
-- Keep compact checked-in fixtures under `games/emerald/tests/fixtures/` so normal tests do not require the full checkout.
-- Mark full-decomp tests `external_data` and run them in a separate CI job.
+```text
+RetroArchOverlay-Emerald/
+    .gitmodules
+    plugin.toml
+    plugin.py
+    game/
+    tests/
+    vendor/
+        pokeemerald/                  # pinned Git submodule
+```
 
-A submodule remains an opt-in developer choice, but the application architecture must not depend on it. This keeps a missing Emerald provider from blocking Dragon Warrior III or any future game.
+Its `.gitmodules` entry is equivalent to:
+
+```ini
+[submodule "vendor/pokeemerald"]
+    path = vendor/pokeemerald
+    url = https://github.com/pret/pokeemerald.git
+```
+
+The gitlink in the plugin repository pins the tested decomp commit. Do not track a moving decomp branch as the compatibility contract. Updating the decomp means deliberately advancing the gitlink, rebuilding generated fixtures/cache if applicable, running tests, and reviewing the change in the plugin repository.
+
+The standard clone workflow is:
+
+```powershell
+git clone --recurse-submodules `
+    https://github.com/JEschete/RetroArchOverlay-Emerald.git `
+    .\plugins\RetroArchOverlay-Emerald
+```
+
+For an existing or shallow plugin checkout:
+
+```powershell
+git -C .\plugins\RetroArchOverlay-Emerald submodule update --init --recursive
+```
+
+Rules for submodule-backed plugins:
+
+- Discovery reads only `plugin.toml`; it does not require initialized submodules.
+- Manifest matching uses ROM identity and does not parse the decomp.
+- Required source validation happens only when that plugin is selected for active content.
+- A missing submodule produces `GameUnavailableError` with the plugin repository path and exact `git -C <repo> submodule update --init --recursive` recovery command.
+- The error appears in application diagnostics; it never terminates the harness or disables other plugins.
+- Plugins may accept an explicit external decomp-path override, but their own pinned `vendor/<decomp>` is the default and tested source.
+- Core never clones, updates, resets, or modifies a plugin's submodules.
+- Recursive submodules are supported by the documented Git command.
+
+Keep compact fixtures in the plugin repository so normal unit tests do not require the full submodule. Full-decomp consistency tests are separate and run after `--recurse-submodules` acquisition.
+
+### Derived Data Cache
+
+A plugin may normalize expensive decomp data into a local cache, but the cache is disposable and not an acquisition mechanism. The cache key must include:
+
+- plugin data-schema version
+- plugin repository revision when available
+- decomp submodule revision
+
+The plugin owns parsing and cache schema. Shared infrastructure may provide cache-directory and atomic-file protocols. Deleting the cache must only cost startup time; the pinned submodule remains authoritative.
 
 ## RetroAchievements Boundary
 
@@ -434,7 +537,7 @@ Split the current combined RA module into:
 
 `GameContext` exposes a lazy `RAProgressProvider`. A plugin requests progress using its own manifest's `ra_game_id`. `main.py` must not call `load_ra_progress` once per named game.
 
-Network failure returns typed unavailable/stale progress rather than failing adapter construction. Game achievement catalogs and local detector rules remain inside each game folder.
+Network failure returns typed unavailable/stale progress rather than failing adapter construction. Game achievement catalogs and local detector rules remain inside each plugin repository.
 
 ## Runtime and Error Boundary
 
@@ -443,7 +546,7 @@ Introduce typed errors:
 - `GameUnavailableError`: required game provider or compatible data is missing.
 - `UnsupportedContentError`: manifest matched weakly but content is not supported.
 - `MemoryLayoutError`: required memory values are invalid for the expected game state.
-- `AssetUnavailableError`: a declared packaged asset cannot be resolved.
+- `AssetUnavailableError`: a declared plugin-repository asset cannot be resolved.
 - existing RetroArch transport/protocol errors remain infrastructure errors.
 
 The application controller converts these into generic diagnostic models. The UI renders the diagnostics without knowing the game that produced them beyond manifest display text.
@@ -458,17 +561,20 @@ Keep shared tests under top-level `tests/`:
 
 - RetroArch protocol parsing
 - hash resolution
-- plugin discovery and duplicate detection
+- filesystem manifest discovery and duplicate detection
+- isolated path-based Python loading
+- plugin root and manifest path-containment validation
+- missing, malformed, and partially initialized plugin repositories
 - controller polling/retry behavior
 - generic action/detail/map rendering helpers
 - credential and RA client behavior
-- packaging and asset resolution
+- plugin asset and submodule preflight resolution
 
 Use neutral fake game names in these tests.
 
-### Colocated Game Tests
+### Plugin Repository Tests
 
-Move game-specific tests into each game package. Each game owns:
+Move game-specific tests into each standalone plugin repository. Each plugin owns:
 
 - memory decoder tests with byte fixtures
 - presenter snapshot tests from typed state
@@ -476,34 +582,45 @@ Move game-specific tests into each game package. Each game owns:
 - manifest identity tests
 - plugin construction and unavailable-provider tests
 - knowledge consistency tests
-- optional emulator/external-data integration tests
+- asset and attribution checks
+- optional emulator/decomp-submodule integration tests
 
 Presenter tests should not need an emulator. Memory tests should not construct UI sections. This makes failures identify the broken boundary.
+
+The core repository provides a contract-test runner that accepts a plugin repository path. Plugin repositories may call that runner with a sibling core checkout; they are never installed into Python. A representative development command is:
+
+```powershell
+python ..\RetroArchOverlay\tools\test_plugin.py .
+```
+
+Plugin-local tests may set `PYTHONPATH` to the core repository's `src/` directory or invoke the core test runner. Neither path installs or publishes the plugin.
 
 ### Architecture Tests
 
 Add AST-based tests that fail when:
 
-1. shared code imports `retroarch_overlay.games.<slug>` directly
-2. one game imports another game
-3. a game imports Tk, Pillow, keyring, socket, urllib, or requests
+1. shared code imports a named plugin directly
+2. one plugin imports another plugin
+3. a plugin imports Tk, keyring, socket, urllib, requests, or application infrastructure implementations
 4. `main.py` contains named adapter construction
 5. `presentation/` contains a named game asset path
-6. a game folder lacks a valid `PLUGIN`
-7. two manifests use the same slug
+6. a plugin repository lacks valid `plugin.toml`, `plugin.py`, or `PLUGIN`
+7. two manifests use the same plugin ID or slug
 8. two plugins declare conflicting CLI options
-9. a plugin performs forbidden work at import time
-10. a declared package asset is absent
+9. a manifest entry or declared path escapes the repository root
+10. a plugin performs forbidden work at import time
+11. a declared source-controlled asset is absent
+12. a required submodule is absent and construction does not return a typed unavailable result
 
-Also add a simple source scan for known current game names outside `games/`, with explicit exceptions for user-facing top-level documentation. AST rules are the primary enforcement; name scanning is a backstop.
+Also add a simple source scan for known current game names inside core production source, with explicit exceptions for user-facing top-level documentation and migration compatibility shims. AST rules are the primary enforcement; name scanning is a backstop.
 
 ### Test Markers
 
 Define these markers:
 
 - `unit`: no network, emulator, ROM, or external checkout
-- `packaging`: builds/inspects an installed wheel
-- `external_data`: requires a large optional source/data checkout
+- `plugin_contract`: validates a repository without activating a game
+- `external_data`: requires an initialized decomp or data submodule
 - `emulator`: requires RetroArch and a compatible ROM
 - `network`: contacts a live service
 
@@ -511,7 +628,7 @@ The default CI job runs all tests except `external_data`, `emulator`, and `netwo
 
 ## Migration Plan
 
-Every phase must leave the test suite runnable. Avoid a single large package move.
+Every phase must leave the core and each extracted plugin repository runnable. Avoid one large cross-repository move without compatibility coverage.
 
 ### Phase 0: Characterize Current Behavior
 
@@ -519,7 +636,7 @@ Every phase must leave the test suite runnable. Avoid a single large package mov
 2. Add tests for the existing generic UI helpers.
 3. Record the current full-suite result.
 4. Add pytest markers for optional external data.
-5. Add `git diff --check`, compile, and wheel build commands to the validation routine.
+5. Add `git diff --check`, compile, and plugin-contract commands to the validation routine.
 
 Exit criteria:
 
@@ -540,74 +657,90 @@ Exit criteria:
 - Core imports only the standard library.
 - Full tests pass.
 
-### Phase 2: Add Folder Discovery and Lazy Construction
+### Phase 2: Add External Repository Discovery and Lazy Construction
 
-1. Create `games/discovery.py`.
-2. Implement plugin and manifest validation.
-3. Add lazy adapter construction and per-slug caching.
-4. Continue accepting existing adapters in `AdapterRegistry` temporarily.
-5. Add fake game packages in tests to prove discovery without a central list.
-6. Test that one broken plugin does not hide valid plugins.
+1. Replace the internal `retroarch_overlay.games` scan prototype with a filesystem repository scanner.
+2. Parse and validate `plugin.toml` without importing plugin Python.
+3. Implement isolated path-based `plugin.py` loading under synthetic module names.
+4. Add manifest-only matching followed by lazy adapter construction and per-plugin caching.
+5. Continue accepting existing in-tree adapters in `AdapterRegistry` only as a temporary migration bridge.
+6. Add fake plugin repositories under test temporary directories to prove discovery without a central list.
+7. Test that one malformed, broken, or incomplete repository does not hide valid siblings.
+8. Add repeatable `--plugin-dir`, `--list-plugins`, and `--diagnose` options.
+9. Make an empty or absent default `plugins/` directory a normal startup condition.
 
 Exit criteria:
 
-- A temporary test game is discovered solely because its folder exists.
+- A temporary plugin is discovered solely because its repository contains a valid manifest.
+- Python is not imported until manifest matching selects the plugin.
+- The blank harness starts and displays a useful no-plugins state.
 - No real game needs to move yet.
 
-### Phase 3: Move Dragon Warrior III as the Reference Slice
+### Phase 3: Extract Dragon Warrior III as the Reference Plugin Repository
 
-1. Create `games/dragon_warrior_3/`.
-2. Move ROM identity into `manifest.py`.
-3. Extract `GameState` and other immutable state into `state.py`.
-4. Move RAM/SRAM constants and decoding into `memory.py`.
-5. Move session achievement/item observations into `tracker.py`.
-6. Move item, town, orb, route, unlock, and progression knowledge into `knowledge.py` or `data/`.
-7. Move snapshot construction into `presenter.py`.
-8. Reduce `adapter.py` to orchestration.
-9. Move map assets and attribution into the game folder.
-10. Introduce the generic map document and renderer.
-11. Move DW3 tests beside the game.
-12. Keep `adapters.dragon_warrior_3` as a temporary re-export.
+1. Create the independent `RetroArchOverlay-DragonWarrior3` Git repository next to the core checkout.
+2. Add `plugin.toml` and a lightweight `plugin.py` implementing API version 1.
+3. Move ROM identity and RA metadata into the manifest and plugin repository.
+4. Extract `GameState` and other immutable state into `game/state.py`.
+5. Move RAM/SRAM constants and decoding into `game/memory.py`.
+6. Move session achievement/item observations into `game/tracker.py`.
+7. Move item, town, orb, route, unlock, and progression knowledge into `game/knowledge.py` or `game/data/`.
+8. Move snapshot construction into `game/presenter.py`.
+9. Reduce `game/adapter.py` to orchestration.
+10. Move map assets and attribution into `game/assets/maps/`.
+11. Introduce the generic map document and renderer in core.
+12. Move all DW3 tests into the plugin repository.
+13. Clone or link the repository under core's ignored `plugins/` directory for integration tests.
+14. Keep `adapters.dragon_warrior_3` as a temporary compatibility bridge only until production bootstrap uses the external plugin.
 
 Exit criteria:
 
-- No Dragon Warrior III string, path, image, map transform, RA ID, or import remains in shared source.
+- No Dragon Warrior III string, path, image, map transform, RA ID, or import remains in core production source.
 - The battle and overworld tests pass without an emulator.
-- Packaged map assets resolve from an installed wheel.
+- Map assets resolve directly from the plugin repository root.
+- Deleting the plugin checkout returns the core to a working blank harness.
 
-### Phase 4: Move Emerald
+### Phase 4: Extract Emerald with Its Decomp Submodule
 
-1. Create `games/emerald/`.
-2. Move identity and RA metadata into the manifest.
-3. Extract save-block and battle-memory parsing into `memory.py`.
-4. Move decomp file parsing and validation into `decomp.py`.
-5. Keep pure catch math in `battle.py`.
-6. Separate pure Feebas seed/tile math from decomp tile loading.
-7. Move route, collection, POC, and achievement presentation into `presenter.py`.
-8. Move patch files and related documentation into Emerald assets.
-9. Add compact decomp fixtures and replace broad skip-only coverage where practical.
-10. Move the decomp option declaration into `plugin.py`.
-11. Keep `adapters.emerald` as a temporary re-export.
+1. Create the independent `RetroArchOverlay-Emerald` Git repository next to the core checkout.
+2. Add `plugin.toml` and lightweight `plugin.py` without decomp reads at import time.
+3. Add `pret/pokeemerald` at `vendor/pokeemerald` as a pinned Git submodule.
+4. Declare generic required source files and the external-path override in `plugin.toml`.
+5. Move identity, hashes, RA metadata, save-block logic, and battle-memory parsing into the plugin repository.
+6. Move decomp file parsing and semantic validation into `game/decomp.py`.
+7. Keep pure catch math in `game/battle.py`.
+8. Separate pure Feebas seed/tile math from decomp tile loading.
+9. Move route, collection, POC, and achievement presentation into `game/presenter.py`.
+10. Move patch files and related documentation into `game/assets/`.
+11. Add compact decomp fixtures so unit tests pass without initialized submodules.
+12. Add full consistency tests that run after cloning with `--recurse-submodules`.
+13. Test a missing submodule as an unavailable Emerald plugin, not a process exception.
+14. Keep `adapters.emerald` as a temporary compatibility bridge only until external activation is complete.
 
 Exit criteria:
 
-- Shared source contains no Emerald adapter construction, decomp path, RA ID, patch path, or game-specific setup logic.
-- Missing decomp data reports Emerald unavailable without preventing other games from running.
+- Core source contains no Emerald adapter construction, decomp path, RA ID, patch path, or game-specific setup logic.
+- Missing submodule data reports Emerald unavailable without preventing core or other plugins from running.
 - Pure Emerald math and presenter tests run on a clean checkout.
+- A recursive clone supplies the pinned decomp and passes full-decomp tests.
 
 ### Phase 5: Make Bootstrap Game-Blind
 
-1. Replace named imports in `main.py` with plugin discovery.
-2. Build CLI options from shared options plus plugin declarations.
-3. Replace per-game RA calls with the lazy provider in `GameContext`.
-4. Resolve adapters only after content matching.
-5. Add a diagnostics command or screen listing discovered, ready, and unavailable plugins.
-6. Remove game names from `adapters/__init__.py`.
+1. Remove all named game imports and eager adapter construction from `main.py`.
+2. Remove `--pokeemerald-root` and every other game-specific option from shared bootstrap.
+3. Build CLI options from shared options plus discovered manifest declarations.
+4. Replace per-game RA calls with the lazy provider in `GameContext`.
+5. Resolve and import a plugin only after manifest/content matching.
+6. Add a diagnostics command and screen listing discovered, matched, active, unavailable, and broken plugin repositories.
+7. Remove game names from compatibility registries and `adapters/__init__.py`.
+8. Display `No game plugins found` with searched paths and clone instructions when discovery is empty.
 
 Exit criteria:
 
-- Adding/removing a valid game folder changes discovery without changing shared code.
-- Starting without Emerald external data still allows DW3 selection.
+- Adding or deleting a plugin repository changes discovery without changing core code.
+- Starting with an empty `plugins/` directory works.
+- Starting with Emerald present but its submodule absent still works and allows another plugin to activate.
+- The traceback caused by eager `EmeraldAdapter(...)` construction is impossible.
 
 ### Phase 6: Separate Controller, Infrastructure, and Tk
 
@@ -617,34 +750,37 @@ Exit criteria:
 4. Move polling, retry, and adapter selection from `OverlayWindow` to `app/controller.py`.
 5. Have the controller publish snapshot or diagnostic events through a small protocol.
 6. Split the Tk overlay, details, maps, and credentials into separate modules.
+7. Make plugin discovery, matching, loading, and construction controller events with typed diagnostics.
 
 Exit criteria:
 
 - UI tests use events/documents and do not need a RetroArch client.
 - Controller tests use fake gateways and do not construct Tk.
-- Games import only core contracts and protocols.
+- Plugins import only core contracts and protocols.
 
-### Phase 7: Enforce and Package
+### Phase 7: Enforce the Repository Contract
 
 1. Add all architecture tests.
-2. Add a build-and-inspect wheel test.
-3. Add generic package-data patterns for every game's standardized folders.
-4. Add a game package template under a non-discovered `_template/` folder or a small scaffold command.
-5. Document the one-folder game contribution workflow.
-6. Run tests from both the source checkout and an installed wheel.
+2. Add filesystem fixture repositories covering valid, duplicate, malformed, path-escaping, broken-import, and missing-submodule cases.
+3. Add a core `tools/test_plugin.py <repository>` contract runner.
+4. Publish a separate `RetroArchOverlay-Plugin-Template` Git repository or a copyable template directory under `docs/` that is never part of discovery.
+5. Document clone, update, remove, diagnose, and recursive-submodule workflows.
+6. Run contract tests against both extracted plugin repositories from ordinary source checkouts.
+7. Test paths containing spaces and plugins located outside the core repository.
 
 Exit criteria:
 
-- Boundary violations fail CI.
-- A sample game copied from the template is discovered with no shared edits.
+- Boundary and repository-contract violations fail tests.
+- A sample plugin repository is discovered with no core edits.
+- No plugin workflow invokes Python package installation or publication.
 
 ### Phase 8: Remove Compatibility Layers
 
 1. Update all imports to `core`, `infrastructure`, `presentation`, and `games` paths.
-2. Remove old `adapters/`, root `models.py`, root `retroarch.py`, root `retroachievements.py`, and monolithic `ui.py` re-exports after a deprecation window.
+2. Remove old in-tree `adapters/`, root `models.py`, root `retroarch.py`, root `retroachievements.py`, and monolithic `ui.py` re-exports after both external plugins work.
 3. Remove the top-level `resources/` directory once empty.
 4. Search for stale named-game references in shared source.
-5. Run the full architecture, unit, packaging, and optional-data suites.
+5. Run the full architecture, core unit, plugin-contract, plugin unit, decomp-submodule, and optional emulator suites.
 
 Exit criteria:
 
@@ -652,65 +788,103 @@ Exit criteria:
 - No compatibility import remains.
 - All acceptance criteria below pass.
 
-## New Game Workflow After Migration
+## New Plugin Repository Workflow After Migration
 
-Adding a game should be:
+Adding a game means creating an independent Git repository:
 
-1. Copy `games/_template/` to `games/<new_slug>/`.
-2. Fill in the manifest and lightweight plugin.
-3. Implement typed state and memory decoding.
-4. Add authored knowledge and assets inside the folder.
-5. Build shared presentation documents in the presenter.
-6. Add colocated tests and fixtures.
-7. Run the plugin contract and full unit suites.
+1. Create `RetroArchOverlay-<Game>` from the plugin repository template.
+2. Fill in `plugin.toml` and lightweight `plugin.py`.
+3. Implement typed state and memory decoding under `game/`.
+4. Add authored knowledge, assets, tests, and fixtures inside that repository.
+5. When a decomp is needed, add it with `git submodule add <url> vendor/<name>` and commit the resulting gitlink and `.gitmodules` file.
+6. Build shared presentation documents in the plugin presenter.
+7. Run plugin-local unit tests and the core contract runner.
+8. Clone the repository into a configured plugin root, using `--recurse-submodules` when applicable.
+9. Start core and confirm manifest discovery, content matching, lazy construction, and removal behavior.
 
-No other production file should change. If adding a game requires editing `main.py`, `ui.py`, a central registry, or `pyproject.toml`, the extension boundary has failed.
+No core production file should change. If adding a game requires editing `main.py`, shared UI, a central registry, core project metadata, or core dependency files, the extension boundary has failed.
+
+### User Operations
+
+Install a plugin:
+
+```powershell
+git clone --recurse-submodules <plugin-repository-url> `
+    .\plugins\RetroArchOverlay-<Game>
+```
+
+Update a plugin and its pinned submodules:
+
+```powershell
+git -C .\plugins\RetroArchOverlay-<Game> pull --ff-only
+git -C .\plugins\RetroArchOverlay-<Game> submodule update --init --recursive
+```
+
+Remove a plugin:
+
+```powershell
+Remove-Item -Recurse .\plugins\RetroArchOverlay-<Game>
+```
+
+Core does not wrap these Git operations. It only reports discovered repository state and provides copyable recovery commands.
 
 ## Acceptance Criteria
 
 The migration is complete only when all are true:
 
-- `main.py` imports no game package and contains no game-specific CLI option or RA ID.
-- Shared presentation code imports no game package and contains no game asset path.
-- Each built-in game is discovered from one sibling folder.
-- Each game's code, authored data, assets, fixtures, and setup declaration are inside that folder.
-- One game's import or construction failure does not block another game.
+- `main.py` imports no plugin and contains no game-specific CLI option, hash, path, or RA ID.
+- Shared presentation code imports no plugin and contains no game asset path.
+- The core repository contains no built-in game integration.
+- The harness starts normally with no `plugins/` directory and with an empty one.
+- Each game is discovered from one independently versioned repository under a configured filesystem root.
+- Each game's code, authored data, assets, fixtures, setup declaration, and decomp submodules are inside that repository.
+- One plugin's malformed manifest, import failure, missing submodule, or construction failure does not block another plugin.
 - Adapters are constructed lazily and cached per session.
-- Games do not import Tk or infrastructure implementations.
+- Plugin Python is not imported before manifest matching selects it.
+- Plugins do not import Tk or infrastructure implementations.
 - Raw memory decoding and snapshot presentation are separately testable.
-- External Emerald data is optional and pinned by a small lock file.
+- Emerald's plugin repository pins `pokeemerald` as a submodule and validates it only when Emerald activates.
+- `git clone --recurse-submodules` produces a complete decomp-backed plugin checkout.
 - Generic detail and map documents cover game UI needs without callbacks.
 - Core tests run without Pillow, keyring, RetroArch, a ROM, or `pokeemerald`.
-- Wheels include every declared source-controlled game asset.
-- Architecture tests enforce dependency direction and folder completeness.
-- A sample new game can be added with one new folder and zero shared-code edits.
+- Plugin contract tests run against ordinary repository paths, including paths containing spaces.
+- No Python package manager, wheel, package registry, namespace package, or entry point is required for plugins.
+- Architecture tests enforce dependency direction and repository completeness.
+- A sample new game can be added as one Git repository with zero core-code edits.
 
 ## Validation Commands
 
 Use focused validation after each phase, then the full suite:
 
 ```powershell
-python -m pytest tests/architecture
+python -m pytest tests/test_architecture.py tests/test_game_discovery.py
 python -m pytest -m "not external_data and not emulator and not network"
 python -m pytest
 python -m compileall -q src
-python -m build
+python .\tools\test_plugin.py .\plugins\RetroArchOverlay-<Game>
 git diff --check
 ```
 
-External-data and emulator checks remain separate because they require resources that are not available on every development machine.
+For plugins with a decomp submodule:
+
+```powershell
+git -C .\plugins\RetroArchOverlay-<Game> submodule status --recursive
+python .\tools\test_plugin.py .\plugins\RetroArchOverlay-<Game> --external-data
+```
+
+External-data and emulator checks remain separate because they require recursively cloned resources or local emulator/ROM access.
 
 ## Risks and Controls
 
 ### Dynamic discovery hides import failures
 
-Control: collect every discovery error, expose it in diagnostics, and fail architecture tests for built-in plugin import errors.
+Control: validate manifests without importing Python, collect every load error, expose it in diagnostics, and test that one broken repository does not hide valid siblings.
 
 ### Plugin contracts become too broad
 
 Control: keep the required plugin surface limited to identity, options, support matching, and construction. Add shared presentation models only when at least two games need the concept.
 
-### Game packages begin shipping UI code
+### Plugin repositories begin shipping UI code
 
 Control: prohibit UI imports and callbacks. Add generic immutable document variants instead.
 
@@ -718,13 +892,21 @@ Control: prohibit UI imports and callbacks. Add generic immutable document varia
 
 Control: games calculate map layers, marker positions, and viewports. The renderer only draws the supplied document.
 
-### Packaged assets work from source but not wheels
+### Plugin paths and assets escape repository boundaries
 
-Control: resolve assets only through `importlib.resources` and test an installed wheel.
+Control: canonicalize every manifest and asset path, reject paths outside the repository root, and test external plugin roots plus paths containing spaces.
 
 ### External data makes startup fragile
 
-Control: lazy construction, typed unavailable results, compact unit fixtures, and independent plugin failure handling.
+Control: manifest-only discovery, lazy construction, typed unavailable results, compact unit fixtures, independent plugin failure handling, and exact Git submodule recovery commands.
+
+### Submodule updates break parser compatibility
+
+Control: pin commits with gitlinks, never follow moving branches automatically, include parser consistency tests, and review every submodule revision update in the owning plugin repository.
+
+### Nested repositories confuse core Git operations
+
+Control: ignore `plugins/` in core, never make plugins core submodules, and run Git commands with `git -C <plugin-repository>`.
 
 ### Migration changes behavior while moving files
 
@@ -732,11 +914,12 @@ Control: characterize snapshots first, move one game at a time, preserve tempora
 
 ## Recommended First Implementation Slice
 
-The first implementation slice should be Phases 0 through 2 only:
+The next implementation slice should finish Phase 2:
 
-1. Add architecture characterization tests.
-2. Introduce core contracts with compatibility re-exports.
-3. Implement lightweight folder discovery against fake test games.
-4. Add lazy construction and unavailable-plugin diagnostics.
+1. Replace the internal module-tree discovery prototype with `plugin.toml` repository discovery.
+2. Add isolated path-based loading and lazy construction.
+3. Make `main.py` start with zero eager adapters and zero game-specific options.
+4. Add blank-harness and missing-submodule diagnostics.
+5. Add `--plugin-dir`, `--list-plugins`, and `--diagnose`.
 
-That slice proves the extension boundary before moving hundreds of lines. Dragon Warrior III should then be the first real game moved because it has no external decomp dependency and its fake-memory coverage is already strong.
+That slice fixes the current startup failure before files cross repository boundaries. Dragon Warrior III should then become the first external reference plugin because it has no decomp dependency and its fake-memory coverage is already strong. Emerald follows with `vendor/pokeemerald` as its pinned submodule.

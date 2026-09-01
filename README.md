@@ -2,6 +2,8 @@
 
 Read-only Tk overlay for RetroArch memory data. The current built-in adapters target Pokémon Emerald and Dragon Warrior III.
 
+The project is migrating to a blank core harness with each game maintained as a standalone Git plugin repository. See [ARCHITECTURE_PLAN.md](ARCHITECTURE_PLAN.md) for the filesystem discovery, repository ownership, and decomp-submodule design.
+
 ## Development Setup
 
 Install the package in editable mode before running the full test suite:
