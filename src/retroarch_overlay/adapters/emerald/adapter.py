@@ -4,9 +4,11 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
-from ...models import OverlaySnapshot, PanelRow, PanelSection, RetroArchStatus
-from ...retroarch import MemoryReader, RetroArchError
-from .achievements import GYM_MISSABLES, NEARBY_ACHIEVEMENTS, TRICK_HOUSE_MISSABLES
+from ...core.contracts import MemoryReader
+from ...core.retroachievements import RAProgress
+from ...models import OverlaySnapshot, PanelAction, PanelRow, PanelSection, RetroArchStatus
+from ...retroarch import RetroArchError
+from .achievements import ACHIEVEMENT_TITLES, GYM_MISSABLES, NEARBY_ACHIEVEMENTS, TRICK_HOUSE_MISSABLES
 from .battle import BALLS, ball_multiplier, catch_probability
 from .feebas import feebas_spot_ids, load_route119_fishing_spots, tile_in_front
 from .manifest import RA_GAME_ID, RA_HASHES
@@ -28,6 +30,7 @@ BATTLE_MONS_ADDRESS = 0x02024084
 BATTLE_RESULTS_TURN_ADDRESS = 0x03005D23
 MAIN_IN_BATTLE_ADDRESS = 0x030026F9
 MAIN_IN_BATTLE_MASK = 0x02
+BATTLE_TYPE_TRAINER = 1 << 3
 BATTLE_MON_SIZE = 0x58
 BALL_POCKET_OFFSET = 0x650
 BALL_POCKET_SIZE = 64
@@ -120,8 +123,25 @@ class EmeraldAdapter:
     name = "Pokémon Emerald"
     ra_game_id = RA_GAME_ID
     ra_hashes = RA_HASHES
+    REQUIRED_DECOMP_FILES = (
+        Path("src/data/wild_encounters.json"),
+        Path("data/maps/map_groups.json"),
+        Path("include/constants/pokedex.h"),
+        Path("include/constants/species.h"),
+        Path("include/constants/flags.h"),
+        Path("include/constants/opponents.h"),
+        Path("src/data/pokemon/species_info.h"),
+        Path("src/battle_setup.c"),
+        Path("include/constants/metatile_behaviors.h"),
+        Path("src/metatile_behavior.c"),
+        Path("data/tilesets/primary/general/metatile_attributes.bin"),
+        Path("data/tilesets/secondary/fortree/metatile_attributes.bin"),
+        Path("data/layouts/Route119/map.bin"),
+    )
 
-    def __init__(self, pokeemerald_root: Path):
+    def __init__(self, pokeemerald_root: Path, account_progress: RAProgress | None = None):
+        self._validate_decomp_root(pokeemerald_root)
+        self._account_progress = account_progress
         encounters_path = pokeemerald_root / "src" / "data" / "wild_encounters.json"
         groups_path = pokeemerald_root / "data" / "maps" / "map_groups.json"
         pokedex_path = pokeemerald_root / "include" / "constants" / "pokedex.h"
@@ -139,9 +159,9 @@ class EmeraldAdapter:
         self._national_dex_numbers = self._load_national_dex_numbers(pokedex_path)
         self._species_ids = _parse_numeric_defines(species_path)
         self._species_by_id = {value: name for name, value in self._species_ids.items()}
-        self._catch_rates = self._load_catch_rates(
-            pokeemerald_root / "src" / "data" / "pokemon" / "species_info.h"
-        )
+        species_info_path = pokeemerald_root / "src" / "data" / "pokemon" / "species_info.h"
+        self._catch_rates = self._load_catch_rates(species_info_path)
+        self._exp_yields = self._load_exp_yields(species_info_path)
         self._flag_ids = _parse_numeric_defines(flags_path)
         self._trainer_ids = _parse_numeric_defines(opponents_path)
         self._map_names_by_id = self._build_map_names(group_document)
@@ -165,6 +185,19 @@ class EmeraldAdapter:
             pokeemerald_root / "src" / "battle_setup.c"
         )
         self._route119_fishing_spots = load_route119_fishing_spots(pokeemerald_root)
+
+    @classmethod
+    def _validate_decomp_root(cls, pokeemerald_root: Path) -> None:
+        missing = [path for path in cls.REQUIRED_DECOMP_FILES if not (pokeemerald_root / path).exists()]
+        if missing:
+            details = ", ".join(str(path).replace("\\", "/") for path in missing[:4])
+            if len(missing) > 4:
+                details += f", and {len(missing) - 4} more"
+            raise FileNotFoundError(
+                "Pokémon Emerald support requires a pokeemerald decomp checkout. "
+                f"Expected it at {pokeemerald_root}. Missing: {details}. "
+                "Pass --pokeemerald-root or add the checkout at that path."
+            )
 
     def _load_item_locations(
         self, pokeemerald_root: Path
@@ -251,6 +284,20 @@ class EmeraldAdapter:
             if species and catch_rate:
                 rates[species.group(1)] = int(catch_rate.group(1))
         return rates
+
+    @staticmethod
+    def _load_exp_yields(path: Path) -> dict[str, int]:
+        text = path.read_text(encoding="utf-8")
+        entries = re.split(
+            r"(?=^\s*\[SPECIES_[A-Z0-9_]+\]\s*=)", text, flags=re.MULTILINE
+        )
+        yields = {}
+        for entry in entries:
+            species = re.match(r"\s*\[(SPECIES_[A-Z0-9_]+)\]", entry)
+            exp_yield = re.search(r"\.expYield\s*=\s*(\d+)", entry)
+            if species and exp_yield:
+                yields[species.group(1)] = int(exp_yield.group(1))
+        return yields
 
     @staticmethod
     def _build_map_names(document: dict[str, Any]) -> dict[tuple[int, int], str]:
@@ -377,7 +424,10 @@ class EmeraldAdapter:
             missable = self._missable_section(map_name, event_flags)
             if missable is not None:
                 sections.append(missable)
-            sections.append(self._poc_section(caught_flags, event_flags))
+            sections.append(self._poc_section(caught_flags, event_flags, None))
+            ra_progress = self._achievement_section()
+            if ra_progress is not None:
+                sections.append(ra_progress)
             ra_nearby = self._ra_nearby_section(map_name, event_flags)
             if ra_nearby is not None:
                 sections.append(ra_nearby)
@@ -391,7 +441,10 @@ class EmeraldAdapter:
         missable = self._missable_section(map_name, event_flags)
         if missable is not None:
             sections.append(missable)
-        sections.append(self._poc_section(caught_flags, event_flags))
+        sections.append(self._poc_section(caught_flags, event_flags, encounter))
+        ra_progress = self._achievement_section()
+        if ra_progress is not None:
+            sections.append(ra_progress)
         roamer_alert = self._roamer_section(memory, pointer, map_group, map_number)
         if roamer_alert is not None:
             sections.append(roamer_alert)
@@ -492,9 +545,12 @@ class EmeraldAdapter:
         self, map_name: str, event_flags: bytes
     ) -> PanelSection | None:
         pending = []
+        account_unlocked = self._account_progress.unlocked_ids if self._account_progress else frozenset()
         tracker = self._route_trackers.get(map_name)
         trainer_groups = tracker[0] if tracker is not None else {}
         for achievement in self._nearby_achievements.get(map_name, ()):
+            if achievement.achievement_id in account_unlocked:
+                continue
             if achievement.event_flag is not None:
                 flag_id = self._flag_ids.get(achievement.event_flag)
                 complete = flag_id is not None and self._flag_is_set(event_flags, flag_id)
@@ -509,6 +565,26 @@ class EmeraldAdapter:
         if not pending:
             return None
         return PanelSection("RA nearby", tuple(pending[:3]))
+
+    def _achievement_section(self) -> PanelSection | None:
+        if self._account_progress is None:
+            return None
+        rows = []
+        if self._account_progress.message:
+            rows.append(PanelRow(self._account_progress.message))
+        else:
+            unlocked = self._account_progress.unlocked_ids & ACHIEVEMENT_TITLES.keys()
+            rows.append(
+                PanelRow(
+                    f"{len(unlocked)}/{len(ACHIEVEMENT_TITLES)} tracked unlocked · "
+                    f"{self._account_progress.username}"
+                )
+            )
+            rows.extend(
+                PanelRow(f"{ACHIEVEMENT_TITLES[achievement_id]} · account", True)
+                for achievement_id in sorted(unlocked)
+            )
+        return PanelSection("RetroAchievements", tuple(rows), preview_limit=5)
 
     def _roamer_section(
         self,
@@ -558,6 +634,14 @@ class EmeraldAdapter:
         )
         hm_count = sum(self._flag_is_set(event_flags, flag) for flag in HM_FLAGS)
         flute_count = len(item_ids & FLUTE_ITEM_IDS)
+        details = (
+            PanelRow(f"HMs {hm_count}/8"),
+            PanelRow(f"Flutes {flute_count}/5"),
+            PanelRow(f"Berry pocket species {berry_count}/46"),
+            PanelRow(f"Secret Base furniture {furniture_count}/30"),
+            PanelRow(f"Secret Base dolls {doll_count}/40"),
+            PanelRow(f"Secret Base placed decorations {sum(bool(value) for value in placed)}/16"),
+        )
         return PanelSection(
             "Collections",
             (
@@ -567,6 +651,7 @@ class EmeraldAdapter:
                     f"Base placed {sum(bool(value) for value in placed)}/16"
                 ),
             ),
+            actions=(PanelAction("OPEN COLLECTION DETAILS", "Emerald Collections", details),),
         )
 
     def _battle_snapshot(
@@ -622,7 +707,7 @@ class EmeraldAdapter:
         battle_flags = int.from_bytes(
             memory.read_memory(BATTLE_TYPE_FLAGS_ADDRESS, 4), "little"
         )
-        if not battle_flags & (1 << 3):
+        if not battle_flags & BATTLE_TYPE_TRAINER:
             turns = memory.read_memory(BATTLE_RESULTS_TURN_ADDRESS, 1)[0]
             quantities = self._ball_quantities(memory, save_block_1)
             for species, level, hp, max_hp, status, types in opponents:
@@ -670,7 +755,7 @@ class EmeraldAdapter:
         return OverlaySnapshot(self.name, f"Battle · {location}", tuple(sections))
 
     def _ball_quantities(self, memory: MemoryReader, save_block_1: int) -> dict[int, int]:
-        save_block_2 = int.from_bytes(memory.read_memory(SAVE_BLOCK_2_POINTER, 4), "little")
+        save_block_2 = self._save_block_2_pointer(memory)
         key = int.from_bytes(
             memory.read_memory(save_block_2 + SECURITY_KEY_OFFSET, 2), "little"
         )
@@ -705,20 +790,31 @@ class EmeraldAdapter:
         seed = int.from_bytes(
             memory.read_memory(save_block_1 + DEWFORD_TREND_SEED_OFFSET, 2), "little"
         )
+        active_spots = feebas_spot_ids(seed)
         position = memory.read_memory(PLAYER_POSITION_ADDRESS, 9)
         x = int.from_bytes(position[0:2], "little", signed=True)
         y = int.from_bytes(position[2:4], "little", signed=True)
         target = tile_in_front(x, y, position[8])
         spot_id = self._route119_fishing_spots.get(target)
-        if spot_id not in feebas_spot_ids(seed):
+        if spot_id not in active_spots:
             return None
+        coordinates_by_spot = {spot: coordinates for coordinates, spot in self._route119_fishing_spots.items()}
+        details = tuple(
+            PanelRow(
+                f"Spot {spot} · ({coordinates_by_spot[spot][0]},{coordinates_by_spot[spot][1]})"
+            )
+            for spot in active_spots
+            if spot in coordinates_by_spot
+        )
         return PanelSection(
             "RA · One Tile Away from Beauty",
             (PanelRow(f"VALID TILE · spot {spot_id} · 50% Feebas"),),
+            actions=(PanelAction("OPEN FEEBAS TILES", "Route 119 Feebas Tiles", details),),
         )
 
-    @staticmethod
-    def _poc_section(caught_flags: bytes, event_flags: bytes) -> PanelSection:
+    def _poc_section(
+        self, caught_flags: bytes, event_flags: bytes, encounter: dict[str, Any] | None
+    ) -> PanelSection:
         caught_count = sum(byte.bit_count() for byte in caught_flags)
         next_gate = next(
             (
@@ -734,10 +830,42 @@ class EmeraldAdapter:
             leader, target = next_gate
             ready = "READY" if caught_count >= target else f"need {target - caught_count}"
             text = f"Next: {leader}  {caught_count}/{target}  {ready}"
-        return PanelSection("Professor Oak Challenge", (PanelRow(text),))
+        return PanelSection(
+            "Professor Oak Challenge",
+            (PanelRow(text),),
+            actions=(
+                PanelAction(
+                    "OPEN POC DETAILS",
+                    "Professor Oak Challenge",
+                    self._poc_detail_rows(caught_flags, event_flags, encounter),
+                ),
+            ),
+        )
+
+    def _poc_detail_rows(
+        self, caught_flags: bytes, event_flags: bytes, encounter: dict[str, Any] | None
+    ) -> tuple[PanelRow, ...]:
+        rows = []
+        caught_count = sum(byte.bit_count() for byte in caught_flags)
+        for badge, leader, target in POC_GATES:
+            complete = self._flag_is_set(event_flags, BADGE_FLAG_START + badge)
+            state = "done" if complete else "ready" if caught_count >= target else f"need {target - caught_count}"
+            rows.append(PanelRow(f"{leader}: {caught_count}/{target} · {state}", complete))
+        if encounter is not None:
+            route_rows = self._route_encounter_detail_rows(encounter, caught_flags)
+            if route_rows:
+                rows.append(PanelRow("Current route missing catches"))
+                rows.extend(route_rows)
+            training_rows = self._route_training_rows(encounter)
+            if training_rows:
+                rows.append(PanelRow("Current route EXP basis"))
+                rows.extend(training_rows)
+        return tuple(rows)
 
     @staticmethod
     def _flag_is_set(flags: bytes, flag_id: int) -> bool:
+        if flag_id < 0 or flag_id // 8 >= len(flags):
+            return False
         return bool(flags[flag_id // 8] & (1 << (flag_id % 8)))
 
     def _completion_sections(
@@ -769,13 +897,17 @@ class EmeraldAdapter:
                     continue
                 kind = "hidden" if hidden else "item"
                 missing.append(
-                    f"{item_name} · ({item_x},{item_y}) · {kind}"
+                    (
+                        abs(item_x - player_x) + abs(item_y - player_y),
+                        f"{item_name} · ({item_x},{item_y}) · {kind}",
+                    )
                 )
+            missing.sort(key=lambda entry: entry[0])
             sections.append(
                 self._checklist_section(
                     f"Route items · You ({player_x},{player_y})",
                     len(map_item_locations),
-                    missing,
+                    [text for _, text in missing],
                 )
             )
         elif item_flags:
@@ -826,19 +958,77 @@ class EmeraldAdapter:
         return PanelSection(title, tuple(rows), 4)
 
     def _read_caught_flags(self, memory: MemoryReader) -> bytes:
+        pointer = self._save_block_2_pointer(memory)
+        return memory.read_memory(pointer + POKEDEX_OWNED_OFFSET, DEX_FLAG_BYTES)
+
+    @staticmethod
+    def _save_block_2_pointer(memory: MemoryReader) -> int:
         pointer = int.from_bytes(memory.read_memory(SAVE_BLOCK_2_POINTER, 4), "little")
         if not EWRAM_START <= pointer < EWRAM_END:
             raise RetroArchError(f"Invalid Emerald save block 2 pointer: 0x{pointer:08X}")
-        return memory.read_memory(pointer + POKEDEX_OWNED_OFFSET, DEX_FLAG_BYTES)
+        return pointer
 
-    def _section(
-        self,
-        title: str,
-        field_name: str,
-        encounter: dict[str, Any],
-        caught_flags: bytes,
-        indexes: list[int] | None = None,
-    ) -> PanelSection:
+    def _route_encounter_detail_rows(
+        self, encounter: dict[str, Any], caught_flags: bytes
+    ) -> tuple[PanelRow, ...]:
+        rows = []
+        for field_name, title in (
+            ("land_mons", "Land"),
+            ("water_mons", "Water"),
+            ("rock_smash_mons", "Rock Smash"),
+            ("fishing_mons", "Fishing"),
+        ):
+            if field_name not in encounter:
+                continue
+            for species, values in self._encounter_species(field_name, encounter[field_name]).items():
+                caught = self._is_caught(species, caught_flags)
+                if caught:
+                    continue
+                rows.append(
+                    PanelRow(
+                        f"{title}: {_display_constant(species, 'SPECIES_')} · "
+                        f"Lv {values['min']}-{values['max']} · {values['chance']}%",
+                        False,
+                    )
+                )
+        return tuple(rows)
+
+    def _route_training_rows(self, encounter: dict[str, Any]) -> tuple[PanelRow, ...]:
+        rows = []
+        for field_name, title in (
+            ("land_mons", "Land"),
+            ("water_mons", "Water"),
+            ("rock_smash_mons", "Rock Smash"),
+            ("fishing_mons", "Fishing"),
+        ):
+            if field_name not in encounter:
+                continue
+            species = self._encounter_species(field_name, encounter[field_name])
+            total_chance = sum(values["chance"] for values in species.values())
+            if not total_chance:
+                continue
+            weighted_exp = sum(
+                values["chance"] * self._exp_yields.get(name, 0)
+                for name, values in species.items()
+            ) / total_chance
+            encounter_rate = encounter[field_name].get("encounter_rate")
+            if encounter_rate:
+                steps = 100 / encounter_rate
+                rows.append(
+                    PanelRow(
+                        f"{title}: avg {weighted_exp:.1f} base EXP/encounter · "
+                        f"{encounter_rate}% step rate · ~{steps:.1f} steps/encounter"
+                    )
+                )
+            else:
+                rows.append(PanelRow(f"{title}: avg {weighted_exp:.1f} base EXP/encounter"))
+        if rows:
+            rows.append(PanelRow("Next-level estimates need verified party EXP memory offsets."))
+        return tuple(rows)
+
+    def _encounter_species(
+        self, field_name: str, encounter: dict[str, Any], indexes: list[int] | None = None
+    ) -> OrderedDict[str, dict[str, int]]:
         definition = self._field_definitions[field_name]
         rates = definition["encounter_rates"]
         selected_indexes = indexes if indexes is not None else list(range(len(encounter["mons"])))
@@ -852,6 +1042,18 @@ class EmeraldAdapter:
             entry["min"] = min(entry["min"], mon["min_level"])
             entry["max"] = max(entry["max"], mon["max_level"])
             entry["chance"] += rates[index]
+        return species
+
+    def _section(
+        self,
+        title: str,
+        field_name: str,
+        encounter: dict[str, Any],
+        caught_flags: bytes,
+        indexes: list[int] | None = None,
+    ) -> PanelSection:
+        definition = self._field_definitions[field_name]
+        species = self._encounter_species(field_name, encounter, indexes)
 
         rows = tuple(
             PanelRow(

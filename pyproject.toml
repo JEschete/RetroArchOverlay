@@ -12,11 +12,18 @@ dependencies = [
 	"Pillow>=11.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+	"pytest>=9.0",
+]
+
 [project.scripts]
 retroarch-overlay = "retroarch_overlay.main:main"
+retroarch-overlay-cheeves = "retroarch_overlay.cheeves:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]

@@ -9,11 +9,17 @@ from retroarch_overlay.adapters.emerald.feebas import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+POKEEMERALD_ROOT = PROJECT_ROOT / "pokeemerald"
+requires_pokeemerald = unittest.skipUnless(
+    (POKEEMERALD_ROOT / "include" / "constants" / "metatile_behaviors.h").is_file(),
+    "pokeemerald decomp checkout is not available",
+)
 
 
 class FeebasTests(unittest.TestCase):
+    @requires_pokeemerald
     def test_route119_has_game_defined_fishing_spot_count(self) -> None:
-        spots = load_route119_fishing_spots(PROJECT_ROOT / "pokeemerald")
+        spots = load_route119_fishing_spots(POKEEMERALD_ROOT)
         self.assertEqual(len(spots), 447)
         self.assertEqual(set(spots.values()), set(range(1, 448)))
 

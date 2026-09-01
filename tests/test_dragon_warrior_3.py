@@ -10,8 +10,9 @@ from retroarch_overlay.adapters.dragon_warrior_3.adapter import (
     SRAM_READ_SIZE,
     DragonWarrior3Adapter,
 )
+from retroarch_overlay.core.retroachievements import RAProgress
+from retroarch_overlay.infrastructure.retroachievements import load_ra_progress
 from retroarch_overlay.models import RetroArchStatus
-from retroarch_overlay.retroachievements import RAProgress, load_ra_progress
 
 
 class FakeMemory:
@@ -58,8 +59,9 @@ class DragonWarrior3AdapterTests(unittest.TestCase):
     def test_account_unlocks_are_shown_with_session_detections(self) -> None:
         progress = RAProgress("PlayerOne", frozenset({50439}))
         snapshot = DragonWarrior3Adapter(progress).snapshot(FakeMemory())
-        self.assertEqual(snapshot.sections[0].rows[0].text, "1/50 unlocked · PlayerOne")
-        self.assertIn("Now You Can Open Doors · account", snapshot.sections[0].rows[2].text)
+        achievements = next(section for section in snapshot.sections if section.title == "RetroAchievements")
+        self.assertEqual(achievements.rows[0].text, "1/50 unlocked · PlayerOne")
+        self.assertIn("Now You Can Open Doors · account", achievements.rows[2].text)
 
     def test_supports_official_normalized_hash(self) -> None:
         adapter = DragonWarrior3Adapter()
@@ -96,10 +98,19 @@ class DragonWarrior3AdapterTests(unittest.TestCase):
         self.assertEqual(snapshot.map_position.x, 12)
         self.assertEqual(snapshot.map_position.y, 34)
         self.assertTrue(snapshot.map_position.is_world)
-        self.assertEqual(snapshot.sections[0].rows[0].text, "0/50 detected this session")
-        self.assertEqual(snapshot.sections[0].rows[1].text, "32 exact detectors active · fresh baseline")
-        self.assertIn("Hero Lv 20", snapshot.sections[1].rows[0].text)
-        self.assertIn("Gold 12,345", snapshot.sections[-1].rows[0].text)
+        objective = next(section for section in snapshot.sections if section.title == "Current objective")
+        self.assertEqual(objective.rows[0].text, "Next: recruit a full party")
+        self.assertEqual(
+            tuple(action.label for action in objective.actions),
+            ("OPEN ROUTE PLAN", "OPEN KEY ITEM UNLOCKS", "OPEN RA PRIORITIES"),
+        )
+        achievements = next(section for section in snapshot.sections if section.title == "RetroAchievements")
+        self.assertEqual(achievements.rows[0].text, "0/50 detected this session")
+        self.assertEqual(achievements.rows[1].text, "32 exact detectors active · fresh baseline")
+        party = next(section for section in snapshot.sections if section.title == "Party")
+        self.assertIn("Hero Lv 20", party.rows[0].text)
+        resources = next(section for section in snapshot.sections if section.title == "Resources")
+        self.assertIn("Gold 12,345", resources.rows[2].text)
 
     def test_observed_full_party_and_two_sages_increment_counter(self) -> None:
         adapter = DragonWarrior3Adapter()
@@ -109,8 +120,9 @@ class DragonWarrior3AdapterTests(unittest.TestCase):
         memory.ram[0x07C4] = 4
         memory.ram[0x0719:0x071C] = bytes((3, 3, 4))
         snapshot = adapter.snapshot(memory)
-        self.assertEqual(snapshot.sections[0].rows[0].text, "3/50 detected this session")
-        detected = " ".join(row.text for row in snapshot.sections[0].rows)
+        achievements = next(section for section in snapshot.sections if section.title == "RetroAchievements")
+        self.assertEqual(achievements.rows[0].text, "3/50 detected this session")
+        detected = " ".join(row.text for row in achievements.rows)
         self.assertIn("With a Little Help from My Friends", detected)
         self.assertIn("A New Line of Work", detected)
         self.assertIn("So Much Magic", detected)
@@ -121,8 +133,9 @@ class DragonWarrior3AdapterTests(unittest.TestCase):
         adapter.snapshot(memory)
         memory.ram[0x077C] = 0x58
         snapshot = adapter.snapshot(memory)
-        self.assertEqual(snapshot.sections[0].rows[0].text, "1/50 detected this session")
-        self.assertIn("Now You Can Open Doors", snapshot.sections[0].rows[1].text)
+        achievements = next(section for section in snapshot.sections if section.title == "RetroAchievements")
+        self.assertEqual(achievements.rows[0].text, "1/50 detected this session")
+        self.assertIn("Now You Can Open Doors", achievements.rows[1].text)
         self.assertEqual(snapshot.sections[-1].rows[0].text, "Thief's Key")
 
     def test_moving_item_to_vault_does_not_detect_it_twice(self) -> None:
@@ -133,7 +146,8 @@ class DragonWarrior3AdapterTests(unittest.TestCase):
         memory.ram[0x077C] = 0
         memory.sram[0x0D] = 0x58
         snapshot = adapter.snapshot(memory)
-        self.assertEqual(snapshot.sections[0].rows[0].text, "0/50 detected this session")
+        achievements = next(section for section in snapshot.sections if section.title == "RetroAchievements")
+        self.assertEqual(achievements.rows[0].text, "0/50 detected this session")
 
     def test_swapping_party_members_is_not_a_profession_change(self) -> None:
         adapter = DragonWarrior3Adapter()
@@ -142,7 +156,25 @@ class DragonWarrior3AdapterTests(unittest.TestCase):
         memory.ram[0x0719:0x071B] = bytes((2, 1))
         memory.ram[0x07C2:0x07C4] = bytes((3, 2))
         snapshot = adapter.snapshot(memory)
-        self.assertEqual(snapshot.sections[0].rows[0].text, "0/50 detected this session")
+        achievements = next(section for section in snapshot.sections if section.title == "RetroAchievements")
+        self.assertEqual(achievements.rows[0].text, "0/50 detected this session")
+
+    def test_key_items_drive_objective_unlock_and_orb_guidance(self) -> None:
+        memory = FakeMemory()
+        memory.ram[0x0703] = 10
+        memory.ram[0x07C4] = 4
+        for slot, item_id in enumerate((0x58, 0x59, 0x4F, 0x5A, 0x77, 0x78)):
+            memory.ram[0x077C + slot] = item_id
+        memory.sram[0xCE] = 0x03
+        snapshot = DragonWarrior3Adapter().snapshot(memory)
+
+        objective = next(section for section in snapshot.sections if section.title == "Current objective")
+        self.assertEqual(objective.rows[0].text, "Next: orb hunt · 2/6 found")
+        unlocks = next(section for section in snapshot.sections if section.title == "Unlocks")
+        self.assertEqual(unlocks.rows[0].text, "Key items 4/12")
+        orbs = next(section for section in snapshot.sections if section.title == "Orb route")
+        self.assertIn("Purple Orb", orbs.rows[1].text)
+        self.assertEqual(orbs.actions[0].label, "OPEN ORB CHECKLIST")
 
     def test_battle_lists_enemy_groups_and_hp(self) -> None:
         memory = FakeMemory()

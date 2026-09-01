@@ -2,18 +2,9 @@ import hashlib
 import zlib
 from importlib.metadata import entry_points
 from pathlib import Path
-from typing import Protocol
 
-from ..models import OverlaySnapshot, RetroArchStatus
-from ..retroarch import MemoryReader
-
-
-class GameAdapter(Protocol):
-    name: str
-
-    def supports(self, status: RetroArchStatus, content_hash: str | None = None) -> bool: ...
-
-    def snapshot(self, memory: MemoryReader) -> OverlaySnapshot: ...
+from ..core.contracts import GameAdapter
+from ..core.models import RetroArchStatus
 
 
 class ContentHashResolver:

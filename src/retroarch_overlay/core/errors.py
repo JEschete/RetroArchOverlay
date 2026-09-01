@@ -1,0 +1,2 @@
+class RetroAchievementsError(RuntimeError):
+    pass

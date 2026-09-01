@@ -48,3 +48,11 @@ TRICK_HOUSE_MISSABLES = {
     "Route110_TrickHousePuzzle8": (537247, "Trick Master I Love"),
     "Route110_TrickHouseEnd": (537248, "Nugget of Wisdom"),
 }
+
+ACHIEVEMENT_TITLES = {
+    FEEBAS_ACHIEVEMENT_ID: "One Tile Away from Beauty",
+    ROAMER_ACHIEVEMENT_ID: "Flying Through the Eons",
+    **{achievement.achievement_id: achievement.title for achievement in NEARBY_ACHIEVEMENTS},
+    **{achievement_id: title for achievement_id, title, _, _ in GYM_MISSABLES.values()},
+    **{achievement_id: title for achievement_id, title in TRICK_HOUSE_MISSABLES.values()},
+}

@@ -7,7 +7,7 @@ from tkinter import font as tkfont
 from PIL import Image, ImageTk
 
 from .adapters.base import AdapterRegistry
-from .models import MapPosition, OverlaySnapshot, PanelRow, PanelSection
+from .models import MapPosition, OverlaySnapshot, PanelAction, PanelRow, PanelSection
 from .retroarch import RetroArchClient, RetroArchError
 
 
@@ -22,6 +22,7 @@ def filter_caught_sections(
             tuple(row for row in section.rows if row.caught is not True),
             section.preview_limit,
             section.alert,
+            section.actions,
         )
         for section in sections
         if any(row.caught is not True for row in section.rows)
@@ -268,6 +269,7 @@ class OverlayWindow:
         self._map_position: MapPosition | None = None
         self._map_window: CoordinateMapWindow | None = None
         self._minimap_window: CoordinateMapWindow | None = None
+        self._detail_windows: list[tk.Toplevel] = []
 
         self._title_font = tkfont.Font(family="Georgia", size=18, weight="bold")
         self._section_font = tkfont.Font(family="Segoe UI Semibold", size=10)
@@ -406,6 +408,72 @@ class OverlayWindow:
                 window.destroy()
         self._map_window = None
         self._minimap_window = None
+
+    def _show_detail(self, action: PanelAction) -> None:
+        window = tk.Toplevel(self.root)
+        self._detail_windows.append(window)
+        window.title(action.title)
+        window.attributes("-topmost", True)
+        window.configure(background=self.BACKGROUND)
+        window.geometry("420x520")
+        header = tk.Frame(window, background=self.FOREGROUND, padx=14, pady=10)
+        header.pack(fill="x")
+        tk.Label(
+            header,
+            text=action.title.upper(),
+            background=self.FOREGROUND,
+            foreground="#ffffff",
+            font=self._section_font,
+            anchor="w",
+            justify="left",
+            wraplength=380,
+        ).pack(side="left", fill="x", expand=True)
+        tk.Button(
+            header,
+            text="X",
+            command=window.destroy,
+            background=self.FOREGROUND,
+            foreground="#ffffff",
+            activebackground=self.ACCENT,
+            activeforeground="#ffffff",
+            borderwidth=0,
+            font=("Segoe UI Semibold", 9),
+            padx=6,
+            pady=2,
+        ).pack(side="right")
+        canvas = tk.Canvas(window, background=self.BACKGROUND, highlightthickness=0)
+        scrollbar = tk.Scrollbar(window, orient="vertical", command=canvas.yview)
+        body = tk.Frame(canvas, background=self.BACKGROUND)
+        body.bind("<Configure>", lambda _: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas_window = canvas.create_window((0, 0), window=body, anchor="nw")
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(canvas_window, width=event.width))
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        for row in action.rows:
+            row_frame = tk.Frame(body, background=self.BACKGROUND, padx=14, pady=3)
+            row_frame.pack(fill="x")
+            indicator = "●" if row.caught else "○" if row.caught is False else ""
+            indicator_color = "#27824a" if row.caught else self.MUTED
+            tk.Label(
+                row_frame,
+                text=indicator,
+                width=2,
+                background=self.BACKGROUND,
+                foreground=indicator_color,
+                font=self._body_font,
+                anchor="w",
+            ).pack(side="left")
+            tk.Label(
+                row_frame,
+                text=row.text,
+                background=self.BACKGROUND,
+                foreground=self.FOREGROUND,
+                font=self._body_font,
+                anchor="w",
+                justify="left",
+                wraplength=360,
+            ).pack(side="left", fill="x", expand=True)
 
     def _sync_map_tools(self, result: OverlaySnapshot | Exception | str) -> None:
         position = result.map_position if isinstance(result, OverlaySnapshot) else None
@@ -576,6 +644,21 @@ class OverlayWindow:
                 )
                 row_label.pack(side="left", fill="x", expand=True)
                 self._row_labels.append(row_label)
+            for action in section.actions:
+                tk.Button(
+                    block,
+                    text=action.label,
+                    command=lambda action=action: self._show_detail(action),
+                    background=block_background,
+                    foreground=section_color,
+                    activebackground=block_background,
+                    activeforeground=self.FOREGROUND,
+                    borderwidth=0,
+                    font=("Segoe UI Semibold", 9),
+                    anchor="w",
+                    padx=0,
+                    pady=3,
+                ).pack(fill="x")
             if hidden_count or section_key in self._expanded_sections:
                 label = f"+{hidden_count} more" if hidden_count else "Show less"
                 tk.Button(
@@ -620,7 +703,13 @@ class OverlayWindow:
         ],
     ) -> tuple[object, ...]:
         return tuple(
-            (section_key, section.alert, tuple(row.caught for row in rows), hidden_count)
+            (
+                section_key,
+                section.alert,
+                tuple(row.caught for row in rows),
+                tuple(action.label for action in section.actions),
+                hidden_count,
+            )
             for section, rows, hidden_count, section_key in section_views
         )
 

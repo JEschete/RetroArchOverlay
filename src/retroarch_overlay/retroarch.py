@@ -1,15 +1,11 @@
 import socket
-from typing import Protocol
 
-from .models import RetroArchStatus
+from .core.contracts import MemoryReader
+from .core.models import RetroArchStatus
 
 
 class RetroArchError(RuntimeError):
     pass
-
-
-class MemoryReader(Protocol):
-    def read_memory(self, address: int, size: int) -> bytes: ...
 
 
 def parse_status_response(response: str) -> RetroArchStatus:

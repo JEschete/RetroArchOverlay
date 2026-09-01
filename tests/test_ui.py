@@ -1,6 +1,6 @@
 import unittest
 
-from retroarch_overlay.models import MapPosition, PanelRow, PanelSection
+from retroarch_overlay.models import MapPosition, PanelAction, PanelRow, PanelSection
 from retroarch_overlay.ui import (
     filter_caught_sections,
     map_viewport,
@@ -11,8 +11,9 @@ from retroarch_overlay.ui import (
 
 class CaughtFilterTests(unittest.TestCase):
     def test_hides_caught_rows_and_empty_sections(self) -> None:
+        action = PanelAction("OPEN", "Details", (PanelRow("Detail"),))
         sections = (
-            PanelSection("Land", (PanelRow("Caught", True), PanelRow("Needed", False))),
+            PanelSection("Land", (PanelRow("Caught", True), PanelRow("Needed", False)), actions=(action,)),
             PanelSection("Water", (PanelRow("Known", True),)),
             PanelSection("Unknown", (PanelRow("No dex support"),)),
         )
@@ -21,6 +22,7 @@ class CaughtFilterTests(unittest.TestCase):
 
         self.assertEqual(tuple(section.title for section in filtered), ("Land", "Unknown"))
         self.assertEqual(filtered[0].rows, (PanelRow("Needed", False),))
+        self.assertEqual(filtered[0].actions, (action,))
         self.assertEqual(filtered[1].rows, (PanelRow("No dex support"),))
 
     def test_returns_original_sections_when_disabled(self) -> None:

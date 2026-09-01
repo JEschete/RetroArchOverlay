@@ -39,6 +39,11 @@ from retroarch_overlay.models import RetroArchStatus
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+POKEEMERALD_ROOT = PROJECT_ROOT / "pokeemerald"
+requires_pokeemerald = unittest.skipUnless(
+    (POKEEMERALD_ROOT / "src" / "data" / "wild_encounters.json").is_file(),
+    "pokeemerald decomp checkout is not available",
+)
 
 
 class FakeMemory:
@@ -155,10 +160,11 @@ class FakeMemory:
         raise AssertionError(f"Unexpected read: 0x{address:08X}, {size}")
 
 
+@requires_pokeemerald
 class EmeraldAdapterTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.adapter = EmeraldAdapter(PROJECT_ROOT / "pokeemerald")
+        cls.adapter = EmeraldAdapter(POKEEMERALD_ROOT)
 
     def _wild_battle_mons(self) -> bytes:
         battle_mons = bytearray(BATTLE_MON_SIZE * 2)

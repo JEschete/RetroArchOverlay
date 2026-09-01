@@ -54,8 +54,13 @@ def main() -> None:
         DragonWarrior3Adapter.ra_game_id,
         api_key,
     )
+    emerald_progress = load_ra_progress(
+        args.retroarch_config,
+        EmeraldAdapter.ra_game_id,
+        api_key,
+    )
     registry = AdapterRegistry(
-        [EmeraldAdapter(args.pokeemerald_root), DragonWarrior3Adapter(dragon_progress)],
+        [EmeraldAdapter(args.pokeemerald_root, emerald_progress), DragonWarrior3Adapter(dragon_progress)],
         ContentHashResolver(rom_roots),
     )
     registry.discover()
