@@ -2,7 +2,7 @@
 
 Status: migration started
 
-Decision: RetroArch Overlay is a blank application harness. Every game integration is a standalone Git repository loaded directly from the filesystem. Plugin installation and updates use Git only; Python package publication, wheel distribution, `pipx` injection, namespace packages, and Python entry points are outside the design.
+Decision: RetroArch Overlay is a blank application harness. Every game integration is a standalone Git repository loaded directly from the filesystem. A separate trusted catalog manifest advertises available repositories. The startup repository manager may invoke bounded Git clone and fast-forward update operations; Python package publication, wheel distribution, `pipx` injection, namespace packages, and Python entry points are outside the design.
 
 Implemented in the first slice:
 
@@ -11,10 +11,13 @@ Implemented in the first slice:
 - Tk API-key prompt under `presentation/tk`
 - RA HTTP/config implementation under `infrastructure`
 - an initial internal sibling-folder discovery prototype with isolated failures; this must be replaced by external repository discovery
+- external `plugin.toml` repository discovery with strict validation and isolated lazy loading
+- Pokemon Emerald extracted to `JEschete/RAO_pokeemerald` with `pret/pokeemerald` pinned under `vendor/pokeemerald`
+- Emerald code, tests, and game-specific resources removed from the core repository
 - architecture tests for the first game/core import rules
 - hash-driven, public-Web-API achievement research export with offline saved-page memory-note import
 
-Still pending: extracting both games into standalone repositories, switching production bootstrap to external filesystem discovery, lazy construction, generic map documents, controller/UI separation, and removal of compatibility modules.
+Still pending: extracting Dragon Warrior III into `RAO_dragonwarrior3`, generic map documents, the catalog-backed startup repository manager, controller/UI separation, and removal of remaining compatibility modules.
 
 ## Goal
 
@@ -33,7 +36,7 @@ All source-controlled game knowledge must live in that plugin repository. This i
 3. Discover plugins by scanning configured filesystem directories for repository roots containing `plugin.toml` and `plugin.py`. Do not maintain named imports or a central registry list.
 4. Load each plugin's lightweight `plugin.py` in an isolated module namespace derived from its manifest ID. Construct the adapter lazily only after its manifest matches active content.
 5. The default plugin directory is `<core-repository>/plugins/`. It is ignored by the core repository so each child remains independently versioned. Additional roots may be supplied with repeatable `--plugin-dir` arguments.
-6. Git is the plugin installation and update mechanism. The harness does not clone, install, update, or delete plugin repositories automatically.
+6. Git is the plugin installation and update mechanism. The startup repository manager may clone a user-selected catalog entry with `--recurse-submodules` and update a clean checkout with `pull --ff-only` followed by recursive submodule synchronization. It must never auto-install, force-update, reset, merge, or delete a repository.
 7. A plugin may pin a game decomp under `vendor/` as a Git submodule. `git clone --recurse-submodules` is the standard acquisition path for such plugins.
 8. A plugin import must not require its submodules. Submodule/data validation occurs only when matching content causes lazy adapter construction.
 9. Keep all communication between a plugin and the application in shared, immutable data contracts.
@@ -42,6 +45,7 @@ All source-controlled game knowledge must live in that plugin repository. This i
 12. A missing, incomplete, or broken plugin must not prevent the blank harness or another plugin from starting.
 13. Preserve compatibility imports during extraction, then remove all game code from the core repository.
 14. Enforce these boundaries with automated architecture and plugin contract tests rather than relying only on documentation.
+15. Available-plugin knowledge lives in a separately versioned catalog, not in core source or application configuration. Installed-plugin truth always comes from each local repository's validated `plugin.toml`.
 
 ## Target Dependency Direction
 
@@ -81,8 +85,8 @@ RetroArchOverlay/                         # main/core Git repository
     .gitignore                            # ignores plugins/*
     ARCHITECTURE_PLAN.md
     plugins/                              # discovery root, not tracked by core
-        RetroArchOverlay-Emerald/         # independent Git repository
-        RetroArchOverlay-DragonWarrior3/  # independent Git repository
+        RAO_pokeemerald/                  # independent Git plugin repository
+        RAO_dragonwarrior3/               # independent Git plugin repository
     src/retroarch_overlay/
         __init__.py
         main.py
@@ -255,8 +259,8 @@ Discovery parses `plugin.toml` with the standard-library `tomllib` module before
 
 ```toml
 schema_version = 1
-plugin_id = "org.jeschete.retroarch-overlay.emerald"
-slug = "emerald"
+plugin_id = "org.jeschete.retroarch-overlay.pokeemerald"
+slug = "pokeemerald"
 name = "Pokemon Emerald"
 api_version = 1
 entry = "plugin.py"
@@ -266,12 +270,6 @@ ra_game_id = 668
 cores = ["mgba", "game_boy_advance"]
 content_hints = ["emerald"]
 hashes = ["31446456df04356cb9f2145bada42ed2"]
-
-[[options]]
-key = "emerald.pokeemerald_root"
-flag = "--emerald-pokeemerald-root"
-type = "path"
-required = false
 
 [[sources]]
 id = "pokeemerald"
@@ -340,6 +338,58 @@ Rules for `plugin.py`:
 
 No Python entry-point discovery, package metadata, package installation, or plugin import from `site-packages` is part of this design.
 
+## Plugin Catalog and Startup Repository Manager
+
+The application opens a repository manager before the overlay on every normal startup. The manager compares local filesystem discovery with one or more configured trusted catalog manifests and presents these states generically:
+
+- available to install
+- installed
+- update available
+- local changes present
+- unavailable or invalid
+- catalog identity mismatch
+
+The user may continue to the blank overlay without installing anything. Catalog, network, and Git failures are diagnostics and never prevent startup.
+
+The default catalog is a separately versioned repository owned by the application maintainer. Additional catalog URLs or local catalog files may be configured. Core contains only the default catalog location, cache policy, schema parser, and generic repository UI; it contains no catalog entries or game IDs.
+
+A representative `catalog.toml` is:
+
+```toml
+schema_version = 1
+
+[[plugins]]
+plugin_id = "org.jeschete.retroarch-overlay.pokeemerald"
+slug = "pokeemerald"
+name = "Pokemon Emerald"
+repository = "https://github.com/JEschete/RAO_pokeemerald.git"
+web_url = "https://github.com/JEschete/RAO_pokeemerald"
+```
+
+Catalog rules:
+
+- `plugin_id` is the stable join key between a catalog entry and installed `plugin.toml`.
+- The catalog supplies acquisition metadata only. It does not supply ROM hashes, RAM addresses, options, assets, or runtime matching rules.
+- After clone, the local `plugin.toml` must match the catalog `plugin_id` and slug before the checkout is considered installed.
+- Catalog downloads use an application cache and may fall back to stale validated content when offline.
+- Repository URLs must use an allowed HTTPS Git host unless the user explicitly adds a trusted local catalog.
+- Git commands use argument arrays with a fixed executable and fixed verbs; catalog strings are never evaluated by a shell.
+- Clone targets must be new children of a configured plugin root and may not escape that root.
+- Update is offered only for a recognized checkout with no tracked or untracked changes and a fast-forward remote update.
+- The manager may open the repository web page. Repository deletion is outside the initial manager scope.
+- No install or update occurs without an explicit user action.
+
+The startup sequence is:
+
+1. Resolve plugin roots and trusted catalog locations from application configuration and CLI overrides.
+2. Discover and validate local `plugin.toml` files without importing plugin Python.
+3. Load cached catalogs, refresh them with a bounded network request, and retain stale validated data on failure.
+4. Inspect installed Git repositories with bounded read-only commands.
+5. Render repository states and diagnostics in the startup manager.
+6. Execute only an explicitly selected install or eligible fast-forward update.
+7. Rediscover local manifests after each successful Git operation.
+8. Continue to normal manifest matching, lazy loading, and overlay startup.
+
 ## Plugin Repository Location
 
 The normal checkout layout is:
@@ -347,7 +397,7 @@ The normal checkout layout is:
 ```text
 C:/Projects/Personal/RetroArchOverlay/                       # core repo
 C:/Projects/Personal/RetroArchOverlay/plugins/
-C:/Projects/Personal/RetroArchOverlay/plugins/RetroArchOverlay-Emerald/   # plugin repo
+C:/Projects/Personal/RetroArchOverlay/plugins/RAO_pokeemerald/   # plugin repo
 ```
 
 Example acquisition:
@@ -355,8 +405,8 @@ Example acquisition:
 ```powershell
 git clone https://github.com/JEschete/RetroArchOverlay.git
 git clone --recurse-submodules `
-    https://github.com/JEschete/RetroArchOverlay-Emerald.git `
-    .\RetroArchOverlay\plugins\RetroArchOverlay-Emerald
+    https://github.com/JEschete/RAO_pokeemerald.git `
+    .\RetroArchOverlay\plugins\RAO_pokeemerald
 ```
 
 The core repository ignores everything under `plugins/` except an optional placeholder/readme. It never treats plugin repositories as its own submodules.
@@ -376,8 +426,8 @@ The intended repository topology is:
 
 ```text
 JEschete/RetroArchOverlay                  # blank core harness
-JEschete/RetroArchOverlay-DragonWarrior3  # one game plugin
-JEschete/RetroArchOverlay-Emerald         # one game plugin plus pokeemerald submodule
+JEschete/RAO_dragonwarrior3  # one game plugin
+JEschete/RAO_pokeemerald     # one game plugin plus pokeemerald submodule
 ```
 
 Each repository has its own history, issues, releases, tests, license, and update cadence. The core repository does not aggregate plugin source through Git submodules. A plugin may aggregate only the upstream decomps or data sources that it directly owns as dependencies.
@@ -397,7 +447,7 @@ Configuration precedence should be:
 
 Use stable namespaced keys such as `emerald.decomp_root`. Validate generic types in the application and game-specific semantics in the plugin.
 
-The shared application configuration may remember plugin discovery roots, but it must not contain a list of known plugin IDs. Discoverability comes from the filesystem on each launch.
+The shared application configuration may remember plugin discovery roots and trusted catalog locations, but it must not contain a list of known plugin IDs. Installed-plugin discoverability comes from the filesystem on each launch; available-plugin discoverability comes from validated catalogs.
 
 ## Presentation and Action Boundary
 
@@ -451,8 +501,8 @@ All of it belongs inside the owning standalone plugin repository.
 
 Specific moves:
 
-- `resources/dragon_warrior_3/*` to `RetroArchOverlay-DragonWarrior3/game/assets/maps/`.
-- `resources/24186-PokemonEmerald-Subset-POC/*` to `RetroArchOverlay-Emerald/game/assets/patches/professor_oak_challenge/`.
+- `resources/dragon_warrior_3/*` to `RAO_dragonwarrior3/game/assets/maps/`.
+- `resources/24186-PokemonEmerald-Subset-POC/*` to `RAO_pokeemerald/game/assets/patches/professor_oak_challenge/`.
 - Dragon Warrior III map loading and calibration out of `ui.py`.
 - Emerald's `--pokeemerald-root` declaration out of `main.py`.
 - All RA game IDs out of `main.py` and into manifests.
@@ -469,7 +519,7 @@ Decomps and similar upstream source trees belong to the plugin that consumes the
 Emerald's expected repository layout is:
 
 ```text
-RetroArchOverlay-Emerald/
+RAO_pokeemerald/
     .gitmodules
     plugin.toml
     plugin.py
@@ -493,14 +543,14 @@ The standard clone workflow is:
 
 ```powershell
 git clone --recurse-submodules `
-    https://github.com/JEschete/RetroArchOverlay-Emerald.git `
-    .\plugins\RetroArchOverlay-Emerald
+    https://github.com/JEschete/RAO_pokeemerald.git `
+    .\plugins\RAO_pokeemerald
 ```
 
 For an existing or shallow plugin checkout:
 
 ```powershell
-git -C .\plugins\RetroArchOverlay-Emerald submodule update --init --recursive
+git -C .\plugins\RAO_pokeemerald submodule update --init --recursive
 ```
 
 Rules for submodule-backed plugins:
@@ -511,7 +561,7 @@ Rules for submodule-backed plugins:
 - A missing submodule produces `GameUnavailableError` with the plugin repository path and exact `git -C <repo> submodule update --init --recursive` recovery command.
 - The error appears in application diagnostics; it never terminates the harness or disables other plugins.
 - Plugins may accept an explicit external decomp-path override, but their own pinned `vendor/<decomp>` is the default and tested source.
-- Core never clones, updates, resets, or modifies a plugin's submodules.
+- Normal discovery, matching, activation, and overlay runtime never modify a plugin or its submodules. The startup repository manager may initialize or synchronize pinned submodules only during an explicit user-selected install or eligible fast-forward update.
 - Recursive submodules are supported by the documented Git command.
 
 Keep compact fixtures in the plugin repository so normal unit tests do not require the full submodule. Full-decomp consistency tests are separate and run after `--recurse-submodules` acquisition.
@@ -678,7 +728,7 @@ Exit criteria:
 
 ### Phase 3: Extract Dragon Warrior III as the Reference Plugin Repository
 
-1. Create the independent `RetroArchOverlay-DragonWarrior3` Git repository next to the core checkout.
+1. Create the independent `RAO_dragonwarrior3` Git plugin repository next to the core checkout.
 2. Add `plugin.toml` and a lightweight `plugin.py` implementing API version 1.
 3. Move ROM identity and RA metadata into the manifest and plugin repository.
 4. Extract `GameState` and other immutable state into `game/state.py`.
@@ -702,7 +752,7 @@ Exit criteria:
 
 ### Phase 4: Extract Emerald with Its Decomp Submodule
 
-1. Create the independent `RetroArchOverlay-Emerald` Git repository next to the core checkout.
+1. Create the independent `RAO_pokeemerald` Git plugin repository next to the core checkout.
 2. Add `plugin.toml` and lightweight `plugin.py` without decomp reads at import time.
 3. Add `pret/pokeemerald` at `vendor/pokeemerald` as a pinned Git submodule.
 4. Declare generic required source files and the external-path override in `plugin.toml`.
@@ -734,6 +784,9 @@ Exit criteria:
 6. Add a diagnostics command and screen listing discovered, matched, active, unavailable, and broken plugin repositories.
 7. Remove game names from compatibility registries and `adapters/__init__.py`.
 8. Display `No game plugins found` with searched paths and clone instructions when discovery is empty.
+9. Add the every-launch repository manager backed by configured catalog manifests and cached offline fallback.
+10. Add explicit Install, eligible fast-forward Update, Open Repository, and Continue actions.
+11. Rediscover manifests after successful Git operations without restarting the process.
 
 Exit criteria:
 
@@ -741,6 +794,9 @@ Exit criteria:
 - Starting with an empty `plugins/` directory works.
 - Starting with Emerald present but its submodule absent still works and allows another plugin to activate.
 - The traceback caused by eager `EmeraldAdapter(...)` construction is impossible.
+- A catalog or network failure still permits continuing to the blank overlay or an installed plugin.
+- Repeated install or update clicks cannot start duplicate Git operations for one repository.
+- Adding a catalog entry requires no core repository change.
 
 ### Phase 6: Separate Controller, Infrastructure, and Tk
 
@@ -806,7 +862,7 @@ No core production file should change. If adding a game requires editing `main.p
 
 ### User Operations
 
-Install a plugin:
+Install a plugin through the startup repository manager, or manually:
 
 ```powershell
 git clone --recurse-submodules <plugin-repository-url> `
@@ -826,7 +882,7 @@ Remove a plugin:
 Remove-Item -Recurse .\plugins\RetroArchOverlay-<Game>
 ```
 
-Core does not wrap these Git operations. It only reports discovered repository state and provides copyable recovery commands.
+The startup repository manager wraps only the safe install and fast-forward update operations described above. Manual Git commands remain supported for recovery and advanced workflows.
 
 ## Acceptance Criteria
 
@@ -851,6 +907,8 @@ The migration is complete only when all are true:
 - No Python package manager, wheel, package registry, namespace package, or entry point is required for plugins.
 - Architecture tests enforce dependency direction and repository completeness.
 - A sample new game can be added as one Git repository with zero core-code edits.
+- The startup repository manager compares installed manifests with a separately versioned trusted catalog and never installs or updates without explicit user action.
+- Offline, malformed-catalog, dirty-checkout, and Git-failure states remain recoverable and do not prevent overlay startup.
 
 ## Validation Commands
 

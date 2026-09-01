@@ -1,6 +1,6 @@
 # RetroArch Overlay
 
-Read-only Tk overlay for RetroArch memory data. The current built-in adapters target Pokémon Emerald and Dragon Warrior III.
+Read-only Tk overlay for RetroArch memory data. Dragon Warrior III remains a temporary built-in adapter while Pokemon Emerald is loaded from a standalone plugin repository.
 
 The project is migrating to a blank core harness with each game maintained as a standalone Git plugin repository. See [ARCHITECTURE_PLAN.md](ARCHITECTURE_PLAN.md) for the filesystem discovery, repository ownership, and decomp-submodule design.
 
@@ -15,23 +15,25 @@ python -m pytest
 
 The test configuration also adds `src` to `PYTHONPATH`, so focused tests can run from a fresh checkout without installation when their optional runtime dependencies are not needed.
 
-## Pokémon Emerald Data
+## Pokemon Emerald Plugin
 
-Emerald support derives maps, encounters, flags, Feebas tiles, catch rates, and EXP yields from a local `pokeemerald` decomp checkout. By default the app expects that checkout at:
-
-```text
-RetroArchOverlay/pokeemerald
-```
-
-You can use another location with:
+Clone the Emerald plugin and its pinned `pret/pokeemerald` submodule into the default discovery root:
 
 ```powershell
-retroarch-overlay --pokeemerald-root C:\path\to\pokeemerald
+git clone --recurse-submodules `
+	https://github.com/JEschete/RAO_pokeemerald.git `
+	.\plugins\RAO_pokeemerald
 ```
 
-Keeping `pokeemerald` as an external ignored checkout is the least intrusive default. A git submodule is reasonable if you want every development machine to use the exact same decomp revision, but it should stay optional because the overlay can already accept `--pokeemerald-root` and not every contributor needs Emerald data locally.
+The core discovers immediate child repositories containing `plugin.toml`. An additional root can be supplied with a repeatable option:
 
-When the decomp checkout is absent, decomp-backed Emerald tests are skipped and the adapter raises a clear startup error naming the missing files.
+```powershell
+retroarch-overlay --plugin-dir D:\RetroArchOverlayPlugins
+```
+
+Plugin Python is imported only after its manifest matches active content. If the submodule is missing, the plugin reports the exact `git submodule update --init --recursive` recovery command without preventing the core harness from running.
+
+Review [DMCA_AUDIT.md](DMCA_AUDIT.md) and each plugin's rights/provenance report before public redistribution.
 
 ## Achievement Research Export
 

@@ -8,6 +8,7 @@ from tkinter import font as tkfont
 from PIL import Image, ImageChops, ImageTk
 
 from .adapters.base import AdapterRegistry
+from .core.errors import GameUnavailableError
 from .models import MapPosition, OverlaySnapshot, PanelAction, PanelRow, PanelSection
 from .retroarch import RetroArchClient, RetroArchError
 
@@ -739,7 +740,7 @@ class OverlayWindow:
                         self._results.put(f"No adapter for {status.core}: {status.content}")
                     else:
                         self._results.put(adapter.snapshot(self.client))
-            except (OSError, RetroArchError, ValueError) as error:
+            except (GameUnavailableError, OSError, RetroArchError, ValueError) as error:
                 self._results.put(error)
             self._stop.wait(0.5)
 

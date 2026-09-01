@@ -5,7 +5,10 @@ from .contracts import (
 	GameOptionSpec,
 	GamePlugin,
 	MemoryReader,
+	PluginRepositoryManifest,
+	PluginSourceSpec,
 )
+from .errors import GameUnavailableError, PluginManifestError
 from .models import (
 	MapPosition,
 	OverlaySnapshot,
@@ -30,12 +33,16 @@ __all__ = [
 	"GameManifest",
 	"GameOptionSpec",
 	"GamePlugin",
+	"GameUnavailableError",
 	"MapPosition",
 	"MemoryReader",
 	"OverlaySnapshot",
 	"PanelAction",
 	"PanelRow",
 	"PanelSection",
+	"PluginManifestError",
+	"PluginRepositoryManifest",
+	"PluginSourceSpec",
 	"RAAchievement",
 	"RACodeNotesPage",
 	"RAConsole",

@@ -34,6 +34,16 @@ def imported_modules(path: Path) -> tuple[tuple[str, int], ...]:
 
 
 class ArchitectureBoundaryTests(unittest.TestCase):
+    def test_core_production_source_contains_no_emerald_plugin_knowledge(self) -> None:
+        violations = []
+        forbidden = ("EmeraldAdapter", "adapters.emerald", "pokeemerald-root")
+        for path in SOURCE_ROOT.rglob("*.py"):
+            content = path.read_text(encoding="utf-8")
+            for value in forbidden:
+                if value in content:
+                    violations.append(f"{path.relative_to(PROJECT_ROOT)} contains {value}")
+        self.assertEqual(violations, [])
+
     def test_game_modules_do_not_import_external_io_or_ui_implementations(self) -> None:
         violations = []
         for root in GAME_ROOTS:

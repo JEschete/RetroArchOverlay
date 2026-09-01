@@ -1,7 +1,9 @@
 from dataclasses import dataclass, field
-from typing import Mapping, Protocol
+from pathlib import Path
+from typing import Callable, Mapping, Protocol
 
 from .models import OverlaySnapshot, RetroArchStatus
+from .retroachievements import RAProgress
 
 
 class MemoryReader(Protocol):
@@ -32,11 +34,40 @@ class GameOptionSpec:
     key: str
     flags: tuple[str, ...]
     help: str = ""
+    value_type: str = "str"
+    required: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class PluginSourceSpec:
+    source_id: str
+    kind: str
+    path: Path
+    required: bool = False
+    required_files: tuple[Path, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PluginRepositoryManifest:
+    schema_version: int
+    plugin_id: str
+    slug: str
+    display_name: str
+    api_version: int
+    entry: Path
+    ra_game_id: int | None = None
+    supported_cores: frozenset[str] = frozenset()
+    content_hints: tuple[str, ...] = ()
+    content_hashes: frozenset[str] = frozenset()
+    options: tuple[GameOptionSpec, ...] = ()
+    sources: tuple[PluginSourceSpec, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class GameContext:
     settings: Mapping[str, object] = field(default_factory=dict)
+    repository_root: Path | None = None
+    ra_progress_provider: Callable[[int], RAProgress | None] | None = None
 
 
 class GamePlugin(Protocol):
