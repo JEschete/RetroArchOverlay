@@ -1,6 +1,7 @@
 import queue
 import threading
 import tkinter as tk
+import webbrowser
 from pathlib import Path
 from tkinter import font as tkfont
 
@@ -65,21 +66,40 @@ def project_map_point(
 
 def map_source_point(position: MapPosition, map_key: str) -> tuple[int, int]:
     if map_key == "world":
-        return ((position.x + 117) % 256) * 16 + 8, ((position.y + 126) % 256) * 16 + 8
+        return ((position.x - 3) % 256) * 16 + 8, ((position.y - 4) % 256) * 16 + 8
     return position.x * 16 + 24, position.y * 16 + 24
 
 
+def wrapped_map_delta(point: float, center: float, span: int) -> float:
+    return (point - center + span / 2) % span - span / 2
+
+
+def tracked_map_position(
+    previous: MapPosition | None, current: MapPosition
+) -> MapPosition | None:
+    return current if current.is_world else previous
+
+
 class CoordinateMapWindow:
+    ZOOM_LEVELS = (1, 2, 4, 8, 16)
     MAP_ROOT = Path(__file__).resolve().parents[2] / "resources" / "dragon_warrior_3"
     MAPS = {
         "world": ("Main World", MAP_ROOT / "world.png"),
         "underworld": ("Alefgard", MAP_ROOT / "underworld.png"),
     }
+    MAP_URLS = {
+        "world": "https://www.vgmaps.com/Atlas/NES/DragonWarriorIII-MainWorld.png",
+        "underworld": "https://www.vgmaps.com/Atlas/NES/DragonWarriorIII-WorldOfDarkness-Alefgard.png",
+    }
 
     def __init__(self, owner: tk.Tk, compact: bool = False) -> None:
         self.compact = compact
         self.position: MapPosition | None = None
+        self._indoor_map_id: int | None = None
         self.zoom = 1
+        self._pan_source = (0.0, 0.0)
+        self._pan_drag_start = (0, 0)
+        self._pan_drag_origin = (0.0, 0.0)
         self._photo: ImageTk.PhotoImage | None = None
         self._images = {
             key: Image.open(path).convert("RGB")
@@ -124,6 +144,18 @@ class CoordinateMapWindow:
                 font=("Segoe UI Semibold", 9),
             )
             self.zoom_label.pack(side="right")
+            tk.Button(
+                toolbar,
+                text="CENTER",
+                command=self._recenter,
+                background=OverlayWindow.FOREGROUND,
+                foreground="#ffffff",
+                activebackground=OverlayWindow.ACCENT,
+                activeforeground="#ffffff",
+                borderwidth=0,
+                font=("Segoe UI Semibold", 9),
+                padx=8,
+            ).pack(side="right", padx=(4, 0))
             for text, delta in (("+", 1), ("−", -1)):
                 tk.Button(
                     toolbar,
@@ -147,6 +179,21 @@ class CoordinateMapWindow:
             pady=5 if compact else 8,
         )
         self.heading.pack(fill="x")
+        self.credit = tk.Label(
+            self.window,
+            text="Map by Rick N. Bruns · VGMaps · v1.5 (2012)",
+            background=OverlayWindow.FOREGROUND,
+            foreground="#d5ddd8",
+            font=("Segoe UI", 8),
+            cursor="hand2",
+            padx=8,
+            pady=4,
+        )
+        self.credit.pack(side="bottom", fill="x")
+        self.credit.bind(
+            "<Button-1>",
+            lambda _: webbrowser.open(self.MAP_URLS[self._map_key()]),
+        )
         self.canvas = tk.Canvas(
             self.window,
             background="#050a12",
@@ -156,12 +203,21 @@ class CoordinateMapWindow:
         self.canvas.bind("<Configure>", lambda _: self._redraw())
         if not compact:
             self.canvas.bind("<MouseWheel>", self._zoom_wheel)
+            self.canvas.bind("<ButtonPress-1>", self._start_pan)
+            self.canvas.bind("<B1-Motion>", self._pan)
+            self.canvas.bind("<ButtonRelease-1>", self._finish_pan)
         self.window.withdraw()
 
     def show(self) -> None:
         self.window.deiconify()
         self.window.lift()
         self._redraw()
+
+    def toggle(self) -> None:
+        if self.window.state() == "withdrawn":
+            self.show()
+        else:
+            self.hide()
 
     def hide(self) -> None:
         self.window.withdraw()
@@ -173,9 +229,12 @@ class CoordinateMapWindow:
 
     def update(self, position: MapPosition) -> None:
         previous = self.position
-        self.position = position
-        if not self.compact and previous is None and position.area == "Underworld":
-            self.mode.set("underworld")
+        self.position = tracked_map_position(previous, position)
+        self._indoor_map_id = None if position.is_world else position.map_id
+        if not self.compact and position.is_world:
+            map_key = "underworld" if position.area == "Underworld" else "world"
+            if previous is None or previous.area != position.area:
+                self.mode.set(map_key)
         self._redraw()
 
     def _map_key(self) -> str:
@@ -184,23 +243,64 @@ class CoordinateMapWindow:
         return "underworld" if self.position and self.position.area == "Underworld" else "world"
 
     def _change_zoom(self, delta: int) -> None:
-        levels = (1, 2, 4)
-        index = max(0, min(levels.index(self.zoom) + delta, len(levels) - 1))
-        self.zoom = levels[index]
+        index = max(
+            0,
+            min(
+                self.ZOOM_LEVELS.index(self.zoom) + delta,
+                len(self.ZOOM_LEVELS) - 1,
+            ),
+        )
+        self.zoom = self.ZOOM_LEVELS[index]
+        if self.zoom == 1:
+            self._pan_source = (0.0, 0.0)
         self.zoom_label.configure(text=f"{self.zoom}×")
         self._redraw()
 
     def _zoom_wheel(self, event: tk.Event) -> None:
         self._change_zoom(1 if event.delta > 0 else -1)
 
+    def _recenter(self) -> None:
+        self._pan_source = (0.0, 0.0)
+        self._redraw()
+
+    def _start_pan(self, event: tk.Event) -> None:
+        if self.zoom == 1:
+            return
+        self._pan_drag_start = (event.x, event.y)
+        self._pan_drag_origin = self._pan_source
+        self.canvas.configure(cursor="fleur")
+
+    def _pan(self, event: tk.Event) -> None:
+        if self.zoom == 1:
+            return
+        map_key = self._map_key()
+        source = self._images[map_key]
+        canvas_width = max(self.canvas.winfo_width(), 1)
+        canvas_height = max(self.canvas.winfo_height(), 1)
+        crop_width = source.width / self.zoom
+        crop_height = source.height / self.zoom
+        scale = min(canvas_width / crop_width, canvas_height / crop_height)
+        delta_x = (event.x - self._pan_drag_start[0]) / scale
+        delta_y = (event.y - self._pan_drag_start[1]) / scale
+        self._pan_source = (
+            (self._pan_drag_origin[0] - delta_x) % source.width,
+            (self._pan_drag_origin[1] - delta_y) % source.height,
+        )
+        self._redraw()
+
+    def _finish_pan(self, _event: tk.Event) -> None:
+        self.canvas.configure(cursor="")
+
     def _redraw(self) -> None:
         self.canvas.delete("all")
         if self.position is None:
+            if self._indoor_map_id is not None:
+                self.heading.configure(text=f"Map {self._indoor_map_id:04X} · indoors")
             return
         width = max(self.canvas.winfo_width(), 100)
         height = max(self.canvas.winfo_height(), 100)
-        if self.compact and not self.position.is_world:
-            self.heading.configure(text=f"Map {self.position.map_id:04X} · indoors")
+        if self.compact and self._indoor_map_id is not None:
+            self.heading.configure(text=f"Map {self._indoor_map_id:04X} · indoors")
             self.canvas.create_text(
                 width / 2,
                 height / 2,
@@ -238,10 +338,12 @@ class CoordinateMapWindow:
         else:
             view = source
             if self.zoom > 1:
+                center_x = (source_x + self._pan_source[0]) % source.width
+                center_y = (source_y + self._pan_source[1]) % source.height
                 shifted = ImageChops.offset(
                     source,
-                    source.width // 2 - source_x,
-                    source.height // 2 - source_y,
+                    round(source.width / 2 - center_x),
+                    round(source.height / 2 - center_y),
                 )
                 crop_width = source.width // self.zoom
                 crop_height = source.height // self.zoom
@@ -265,8 +367,12 @@ class CoordinateMapWindow:
                 marker_x = image_x + source_x * scale
                 marker_y = image_y + source_y * scale
             else:
-                marker_x = width / 2
-                marker_y = height / 2
+                marker_x = width / 2 + wrapped_map_delta(
+                    source_x, center_x, source.width
+                ) * scale
+                marker_y = height / 2 + wrapped_map_delta(
+                    source_y, center_y, source.height
+                ) * scale
         self._photo = ImageTk.PhotoImage(rendered)
         self.canvas.create_image(image_x, image_y, image=self._photo, anchor="nw")
         matching_area = (
@@ -286,8 +392,9 @@ class CoordinateMapWindow:
                 width=2,
             )
         map_name = self.MAPS[map_key][0]
+        location_note = " · indoors · last outside" if self._indoor_map_id is not None else ""
         self.heading.configure(
-            text=f"{map_name} · ({self.position.x},{self.position.y})"
+            text=f"{map_name} · ({self.position.x},{self.position.y}){location_note}"
         )
 
 
@@ -331,7 +438,7 @@ class OverlayWindow:
         self._map_position: MapPosition | None = None
         self._map_window: CoordinateMapWindow | None = None
         self._minimap_window: CoordinateMapWindow | None = None
-        self._detail_windows: list[tk.Toplevel] = []
+        self._detail_windows: dict[tuple[str, str], tk.Toplevel] = {}
 
         self._title_font = tkfont.Font(family="Georgia", size=18, weight="bold")
         self._section_font = tkfont.Font(family="Segoe UI Semibold", size=10)
@@ -445,6 +552,9 @@ class OverlayWindow:
     def close(self) -> None:
         self._stop.set()
         self._destroy_map_windows()
+        for window in self._detail_windows.values():
+            window.destroy()
+        self._detail_windows.clear()
         self.root.destroy()
 
     def _show_map(self) -> None:
@@ -453,7 +563,7 @@ class OverlayWindow:
         if self._map_window is None:
             self._map_window = CoordinateMapWindow(self.root)
         self._map_window.update(self._map_position)
-        self._map_window.show()
+        self._map_window.toggle()
 
     def _show_minimap(self) -> None:
         if self._map_position is None:
@@ -461,7 +571,7 @@ class OverlayWindow:
         if self._minimap_window is None:
             self._minimap_window = CoordinateMapWindow(self.root, compact=True)
         self._minimap_window.update(self._map_position)
-        self._minimap_window.show()
+        self._minimap_window.toggle()
 
     def _destroy_map_windows(self) -> None:
         for window in (self._map_window, self._minimap_window):
@@ -471,12 +581,22 @@ class OverlayWindow:
         self._minimap_window = None
 
     def _show_detail(self, action: PanelAction) -> None:
+        key = (action.label, action.title)
+        existing = self._detail_windows.get(key)
+        if existing is not None:
+            if existing.state() == "withdrawn":
+                existing.deiconify()
+                existing.lift()
+            else:
+                existing.withdraw()
+            return
         window = tk.Toplevel(self.root)
-        self._detail_windows.append(window)
+        self._detail_windows[key] = window
         window.title(action.title)
         window.attributes("-topmost", True)
         window.configure(background=self.BACKGROUND)
         window.geometry("420x520")
+        window.protocol("WM_DELETE_WINDOW", window.withdraw)
         header = tk.Frame(window, background=self.FOREGROUND, padx=14, pady=10)
         header.pack(fill="x")
         tk.Label(
@@ -492,7 +612,7 @@ class OverlayWindow:
         tk.Button(
             header,
             text="X",
-            command=window.destroy,
+            command=window.withdraw,
             background=self.FOREGROUND,
             foreground="#ffffff",
             activebackground=self.ACCENT,

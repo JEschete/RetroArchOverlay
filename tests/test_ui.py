@@ -2,11 +2,14 @@ import unittest
 
 from retroarch_overlay.models import MapPosition, PanelAction, PanelRow, PanelSection
 from retroarch_overlay.ui import (
+    CoordinateMapWindow,
     filter_caught_sections,
     map_source_point,
     map_viewport,
     preview_section_rows,
     project_map_point,
+    tracked_map_position,
+    wrapped_map_delta,
 )
 
 
@@ -48,15 +51,35 @@ class CaughtFilterTests(unittest.TestCase):
 
 
 class MapProjectionTests(unittest.TestCase):
-    def test_world_source_point_applies_vgmaps_wrap_calibration(self) -> None:
-        position = MapPosition("World", 0, 52, 90, True)
+    def test_world_source_point_uses_romaly_castle_calibration(self) -> None:
+        position = MapPosition("World", 0, 53, 89, True)
 
-        self.assertEqual(map_source_point(position, "world"), (2712, 3464))
+        self.assertEqual(map_source_point(position, "world"), (808, 1368))
 
     def test_world_source_point_wraps_at_map_edges(self) -> None:
-        position = MapPosition("World", 0, 200, 200, True)
+        position = MapPosition("World", 0, 2, 3, True)
 
-        self.assertEqual(map_source_point(position, "world"), (984, 1128))
+        self.assertEqual(map_source_point(position, "world"), (4088, 4088))
+
+    def test_full_map_supports_two_deeper_zoom_levels(self) -> None:
+        self.assertEqual(CoordinateMapWindow.ZOOM_LEVELS, (1, 2, 4, 8, 16))
+
+    def test_panned_marker_uses_shortest_wrapped_distance(self) -> None:
+        self.assertEqual(wrapped_map_delta(10, 20, 256), -10)
+        self.assertEqual(wrapped_map_delta(250, 5, 256), -11)
+        self.assertEqual(wrapped_map_delta(5, 250, 256), 11)
+
+    def test_entering_town_retains_last_overworld_position(self) -> None:
+        outside = MapPosition("World", 0, 53, 89, True)
+        inside = MapPosition("Dungeon / town", 0x1234, 7, 9, False)
+
+        self.assertIs(tracked_map_position(outside, inside), outside)
+
+    def test_leaving_town_resumes_live_world_position(self) -> None:
+        previous = MapPosition("World", 0, 53, 89, True)
+        current = MapPosition("World", 0, 54, 89, True)
+
+        self.assertIs(tracked_map_position(previous, current), current)
 
     def test_underworld_source_point_preserves_map_border(self) -> None:
         position = MapPosition("Underworld", 0, 12, 34, True)
