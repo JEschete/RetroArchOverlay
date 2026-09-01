@@ -13,6 +13,7 @@ from retroarch_overlay.adapters.dragon_warrior_3.adapter import (
 from retroarch_overlay.core.retroachievements import RAProgress
 from retroarch_overlay.infrastructure.retroachievements import load_ra_progress
 from retroarch_overlay.models import RetroArchStatus
+from retroarch_overlay.retroarch import RetroArchError
 
 
 class FakeMemory:
@@ -37,6 +38,11 @@ class FakeMemory:
         if (address, size) == (SRAM_ADDRESS, SRAM_READ_SIZE):
             return bytes(self.sram)
         raise AssertionError(f"Unexpected read: 0x{address:04X}, {size}")
+
+
+class DescriptorlessMemory:
+    def read_memory(self, _address: int, _size: int) -> bytes:
+        raise RetroArchError("RetroArch core has no descriptor for that address")
 
 
 class DragonWarrior3AdapterTests(unittest.TestCase):
@@ -67,6 +73,15 @@ class DragonWarrior3AdapterTests(unittest.TestCase):
         adapter = DragonWarrior3Adapter()
         status = RetroArchStatus("PLAYING", "Mesen", "Dragon Warrior III", "a86a5318")
         self.assertTrue(adapter.supports(status, "16a03048ce659d3d733026b6b72f2470"))
+        self.assertFalse(adapter.supports(status, "0" * 32))
+
+    def test_supports_title_when_rom_is_outside_search_roots(self) -> None:
+        adapter = DragonWarrior3Adapter()
+        status = RetroArchStatus(
+            "PLAYING", "nes", "Dragon Warrior III (USA)", "5716bd04"
+        )
+
+        self.assertTrue(adapter.supports(status))
         self.assertFalse(adapter.supports(status, "0" * 32))
 
     def test_nes_hash_resolver_ignores_ines_header(self) -> None:
@@ -111,6 +126,10 @@ class DragonWarrior3AdapterTests(unittest.TestCase):
         self.assertIn("Hero Lv 20", party.rows[0].text)
         resources = next(section for section in snapshot.sections if section.title == "Resources")
         self.assertIn("Gold 12,345", resources.rows[2].text)
+
+    def test_descriptorless_core_reports_compatible_core_options(self) -> None:
+        with self.assertRaisesRegex(RetroArchError, "Mesen or FCEUmm"):
+            DragonWarrior3Adapter().snapshot(DescriptorlessMemory())
 
     def test_observed_full_party_and_two_sages_increment_counter(self) -> None:
         adapter = DragonWarrior3Adapter()

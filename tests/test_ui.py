@@ -3,6 +3,7 @@ import unittest
 from retroarch_overlay.models import MapPosition, PanelAction, PanelRow, PanelSection
 from retroarch_overlay.ui import (
     filter_caught_sections,
+    map_source_point,
     map_viewport,
     preview_section_rows,
     project_map_point,
@@ -47,6 +48,21 @@ class CaughtFilterTests(unittest.TestCase):
 
 
 class MapProjectionTests(unittest.TestCase):
+    def test_world_source_point_applies_vgmaps_wrap_calibration(self) -> None:
+        position = MapPosition("World", 0, 52, 90, True)
+
+        self.assertEqual(map_source_point(position, "world"), (2712, 3464))
+
+    def test_world_source_point_wraps_at_map_edges(self) -> None:
+        position = MapPosition("World", 0, 200, 200, True)
+
+        self.assertEqual(map_source_point(position, "world"), (984, 1128))
+
+    def test_underworld_source_point_preserves_map_border(self) -> None:
+        position = MapPosition("Underworld", 0, 12, 34, True)
+
+        self.assertEqual(map_source_point(position, "underworld"), (216, 568))
+
     def test_world_viewport_covers_nes_coordinate_space(self) -> None:
         position = MapPosition("World", 0, 12, 34, True)
         self.assertEqual(map_viewport(position, False), (0, 0, 255, 255))

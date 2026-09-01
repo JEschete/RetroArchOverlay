@@ -208,7 +208,7 @@ class EmeraldAdapterTests(unittest.TestCase):
         )
         self.assertTrue(self.adapter.supports(status))
 
-    def test_requires_official_ra_hash_when_retroarch_reports_crc(self) -> None:
+    def test_uses_title_when_rom_is_outside_search_roots(self) -> None:
         status = RetroArchStatus(
             "PLAYING",
             "game_boy_advance",
@@ -219,7 +219,7 @@ class EmeraldAdapterTests(unittest.TestCase):
             self.adapter.supports(status, "31446456df04356cb9f2145bada42ed2")
         )
         self.assertFalse(self.adapter.supports(status, "0" * 32))
-        self.assertFalse(self.adapter.supports(status))
+        self.assertTrue(self.adapter.supports(status))
 
     def test_zero_save_pointer_waits_for_game(self) -> None:
         memory = FakeMemory(0, 0)
@@ -227,6 +227,7 @@ class EmeraldAdapterTests(unittest.TestCase):
         snapshot = self.adapter.snapshot(memory)
         self.assertEqual(snapshot.location, "Waiting for game/save")
         self.assertEqual(snapshot.sections[0].rows[0].text, "Load or continue a save")
+        self.assertTrue(snapshot.supports_caught_filter)
 
     def test_interior_without_encounters_has_a_location_name(self) -> None:
         snapshot = self.adapter.snapshot(FakeMemory(1, 2))

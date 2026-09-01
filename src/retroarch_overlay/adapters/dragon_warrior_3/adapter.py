@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from ...core.contracts import MemoryReader
 from ...core.retroachievements import RAProgress
 from ...models import MapPosition, OverlaySnapshot, PanelAction, PanelRow, PanelSection, RetroArchStatus
+from ...retroarch import RetroArchError
 from .achievements import ACHIEVEMENTS, ACHIEVEMENTS_BY_ID
 from .manifest import RA_GAME_ID, RA_HASHES
 
@@ -159,13 +160,19 @@ class DragonWarrior3Adapter:
             return False
         if content_hash is not None:
             return content_hash.casefold() in self.ra_hashes
-        if status.content_crc32:
-            return False
         content = status.content.casefold()
         return "dragon warrior iii" in content or "dragon quest iii" in content
 
     def snapshot(self, memory: MemoryReader) -> OverlaySnapshot:
-        ram = memory.read_memory(0, RAM_SIZE)
+        try:
+            ram = memory.read_memory(0, RAM_SIZE)
+        except RetroArchError as error:
+            if "no descriptor" in str(error).casefold():
+                raise RetroArchError(
+                    "The active NES core does not expose readable memory; "
+                    "launch Dragon Warrior III with Mesen or FCEUmm"
+                ) from error
+            raise
         sram = memory.read_memory(SRAM_ADDRESS, SRAM_READ_SIZE)
         state = self._state(ram, sram)
         self._observe(state)

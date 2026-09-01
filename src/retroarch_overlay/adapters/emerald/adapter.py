@@ -391,8 +391,6 @@ class EmeraldAdapter:
             return False
         if content_hash is not None:
             return content_hash.casefold() in self.ra_hashes
-        if status.content_crc32:
-            return False
         return "emerald" in status.content.casefold()
 
     def snapshot(self, memory: MemoryReader) -> OverlaySnapshot:
@@ -402,6 +400,7 @@ class EmeraldAdapter:
                 self.name,
                 "Waiting for game/save",
                 (PanelSection("Status", (PanelRow("Load or continue a save"),)),),
+                supports_caught_filter=True,
             )
         if not EWRAM_START <= pointer < EWRAM_END:
             raise RetroArchError(f"Invalid Emerald save block pointer: 0x{pointer:08X}")
@@ -435,7 +434,9 @@ class EmeraldAdapter:
                 self._completion_sections(memory, pointer, map_name, event_flags, rematches)
             )
             sections.append(self._collection_section(memory, pointer, event_flags))
-            return OverlaySnapshot(self.name, location, tuple(sections))
+            return OverlaySnapshot(
+                self.name, location, tuple(sections), supports_caught_filter=True
+            )
 
         sections = []
         missable = self._missable_section(map_name, event_flags)
@@ -480,7 +481,9 @@ class EmeraldAdapter:
                 )
 
         location = _display_constant(encounter["map"], "MAP_")
-        return OverlaySnapshot(self.name, location, tuple(sections))
+        return OverlaySnapshot(
+            self.name, location, tuple(sections), supports_caught_filter=True
+        )
 
     def _missable_section(
         self, map_name: str, event_flags: bytes
@@ -752,7 +755,12 @@ class EmeraldAdapter:
                             ),
                         )
                     )
-        return OverlaySnapshot(self.name, f"Battle · {location}", tuple(sections))
+        return OverlaySnapshot(
+            self.name,
+            f"Battle · {location}",
+            tuple(sections),
+            supports_caught_filter=True,
+        )
 
     def _ball_quantities(self, memory: MemoryReader, save_block_1: int) -> dict[int, int]:
         save_block_2 = self._save_block_2_pointer(memory)

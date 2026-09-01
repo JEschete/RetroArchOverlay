@@ -46,3 +46,4 @@ class OverlaySnapshot:
     location: str
     sections: tuple[PanelSection, ...]
     map_position: MapPosition | None = None
+    supports_caught_filter: bool = False

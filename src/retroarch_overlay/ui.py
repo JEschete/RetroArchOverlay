@@ -4,7 +4,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import font as tkfont
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageChops, ImageTk
 
 from .adapters.base import AdapterRegistry
 from .models import MapPosition, OverlaySnapshot, PanelAction, PanelRow, PanelSection
@@ -63,6 +63,12 @@ def project_map_point(
     )
 
 
+def map_source_point(position: MapPosition, map_key: str) -> tuple[int, int]:
+    if map_key == "world":
+        return ((position.x + 117) % 256) * 16 + 8, ((position.y + 126) % 256) * 16 + 8
+    return position.x * 16 + 24, position.y * 16 + 24
+
+
 class CoordinateMapWindow:
     MAP_ROOT = Path(__file__).resolve().parents[2] / "resources" / "dragon_warrior_3"
     MAPS = {
@@ -73,6 +79,7 @@ class CoordinateMapWindow:
     def __init__(self, owner: tk.Tk, compact: bool = False) -> None:
         self.compact = compact
         self.position: MapPosition | None = None
+        self.zoom = 1
         self._photo: ImageTk.PhotoImage | None = None
         self._images = {
             key: Image.open(path).convert("RGB")
@@ -108,6 +115,28 @@ class CoordinateMapWindow:
                     padx=12,
                     pady=4,
                 ).pack(side="left", padx=(0, 4))
+            self.zoom_label = tk.Label(
+                toolbar,
+                text="1×",
+                width=3,
+                background=OverlayWindow.FOREGROUND,
+                foreground="#ffffff",
+                font=("Segoe UI Semibold", 9),
+            )
+            self.zoom_label.pack(side="right")
+            for text, delta in (("+", 1), ("−", -1)):
+                tk.Button(
+                    toolbar,
+                    text=text,
+                    command=lambda change=delta: self._change_zoom(change),
+                    background=OverlayWindow.FOREGROUND,
+                    foreground="#ffffff",
+                    activebackground=OverlayWindow.ACCENT,
+                    activeforeground="#ffffff",
+                    borderwidth=0,
+                    font=("Segoe UI Semibold", 12),
+                    width=2,
+                ).pack(side="right", padx=(4, 0))
         self.heading = tk.Label(
             self.window,
             background=OverlayWindow.BACKGROUND,
@@ -125,6 +154,8 @@ class CoordinateMapWindow:
         )
         self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Configure>", lambda _: self._redraw())
+        if not compact:
+            self.canvas.bind("<MouseWheel>", self._zoom_wheel)
         self.window.withdraw()
 
     def show(self) -> None:
@@ -152,10 +183,15 @@ class CoordinateMapWindow:
             return self.mode.get()
         return "underworld" if self.position and self.position.area == "Underworld" else "world"
 
-    @staticmethod
-    def _source_point(position: MapPosition, map_key: str) -> tuple[int, int]:
-        border = 16 if map_key == "underworld" else 0
-        return border + position.x * 16 + 8, border + position.y * 16 + 8
+    def _change_zoom(self, delta: int) -> None:
+        levels = (1, 2, 4)
+        index = max(0, min(levels.index(self.zoom) + delta, len(levels) - 1))
+        self.zoom = levels[index]
+        self.zoom_label.configure(text=f"{self.zoom}×")
+        self._redraw()
+
+    def _zoom_wheel(self, event: tk.Event) -> None:
+        self._change_zoom(1 if event.delta > 0 else -1)
 
     def _redraw(self) -> None:
         self.canvas.delete("all")
@@ -177,15 +213,20 @@ class CoordinateMapWindow:
 
         map_key = self._map_key()
         source = self._images[map_key]
-        source_x, source_y = self._source_point(self.position, map_key)
+        source_x, source_y = map_source_point(self.position, map_key)
         if self.compact:
             crop_size = 18 * 16
-            crop = source.crop(
+            shifted = ImageChops.offset(
+                source,
+                source.width // 2 - source_x,
+                source.height // 2 - source_y,
+            )
+            crop = shifted.crop(
                 (
-                    source_x - crop_size // 2,
-                    source_y - crop_size // 2,
-                    source_x + crop_size // 2,
-                    source_y + crop_size // 2,
+                    source.width // 2 - crop_size // 2,
+                    source.height // 2 - crop_size // 2,
+                    source.width // 2 + crop_size // 2,
+                    source.height // 2 + crop_size // 2,
                 )
             )
             side = min(width, height)
@@ -195,16 +236,37 @@ class CoordinateMapWindow:
             marker_x = width / 2
             marker_y = height / 2
         else:
-            scale = min(width / source.width, height / source.height)
-            image_width = max(1, int(source.width * scale))
-            image_height = max(1, int(source.height * scale))
-            rendered = source.resize(
+            view = source
+            if self.zoom > 1:
+                shifted = ImageChops.offset(
+                    source,
+                    source.width // 2 - source_x,
+                    source.height // 2 - source_y,
+                )
+                crop_width = source.width // self.zoom
+                crop_height = source.height // self.zoom
+                view = shifted.crop(
+                    (
+                        (source.width - crop_width) // 2,
+                        (source.height - crop_height) // 2,
+                        (source.width + crop_width) // 2,
+                        (source.height + crop_height) // 2,
+                    )
+                )
+            scale = min(width / view.width, height / view.height)
+            image_width = max(1, int(view.width * scale))
+            image_height = max(1, int(view.height * scale))
+            rendered = view.resize(
                 (image_width, image_height), Image.Resampling.NEAREST
             )
             image_x = (width - image_width) / 2
             image_y = (height - image_height) / 2
-            marker_x = image_x + source_x * scale
-            marker_y = image_y + source_y * scale
+            if self.zoom == 1:
+                marker_x = image_x + source_x * scale
+                marker_y = image_y + source_y * scale
+            else:
+                marker_x = width / 2
+                marker_y = height / 2
         self._photo = ImageTk.PhotoImage(rendered)
         self.canvas.create_image(image_x, image_y, image=self._photo, anchor="nw")
         matching_area = (
@@ -359,7 +421,6 @@ class OverlayWindow:
             borderwidth=0,
             padx=8,
         )
-        self.hide_caught_toggle.pack(side="right")
 
         self.canvas = tk.Canvas(
             self.root,
@@ -489,6 +550,13 @@ class OverlayWindow:
             if window is not None:
                 window.update(position)
 
+    def _sync_caught_filter(self, result: OverlaySnapshot | Exception | str) -> None:
+        supported = isinstance(result, OverlaySnapshot) and result.supports_caught_filter
+        if supported and not self.hide_caught_toggle.winfo_manager():
+            self.hide_caught_toggle.pack(side="right")
+        elif not supported and self.hide_caught_toggle.winfo_manager():
+            self.hide_caught_toggle.pack_forget()
+
     def _start_drag(self, event: tk.Event) -> None:
         self._drag_start = (event.x_root, event.y_root)
         self._drag_offset = (
@@ -570,6 +638,7 @@ class OverlayWindow:
     def _render(self, result: OverlaySnapshot | Exception | str) -> None:
         if result == self._last_result:
             return
+        self._sync_caught_filter(result)
         self._sync_map_tools(result)
         section_views = self._section_views(result) if isinstance(result, OverlaySnapshot) else ()
         layout = self._layout_signature(section_views)
@@ -687,7 +756,8 @@ class OverlayWindow:
         self, result: OverlaySnapshot
     ) -> tuple[tuple[PanelSection, tuple[PanelRow, ...], int, tuple[str, str, str]], ...]:
         views = []
-        for section in filter_caught_sections(result.sections, self._hide_caught.get()):
+        hide_caught = result.supports_caught_filter and self._hide_caught.get()
+        for section in filter_caught_sections(result.sections, hide_caught):
             section_identity = section.title.split(" · You (", 1)[0]
             section_key = (result.game, result.location, section_identity)
             rows, hidden_count = preview_section_rows(
