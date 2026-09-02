@@ -2,6 +2,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from retroarch_overlay.core.contracts import GameContext
 from retroarch_overlay.core.errors import GameUnavailableError
@@ -12,7 +13,12 @@ from retroarch_overlay.infrastructure.plugin_discovery import (
 from retroarch_overlay.infrastructure.plugin_loader import RepositoryAdapter
 
 
-def write_repository(root: Path, *, required_source: bool = False) -> Path:
+def write_repository(
+    root: Path,
+    *,
+    required_source: bool = False,
+    source_revision: str = "",
+) -> Path:
     repository = root / "plugin"
     (repository / "game").mkdir(parents=True)
     source = '''
@@ -22,6 +28,7 @@ kind = "git-submodule"
 path = "decomp_reference/data"
 required = true
 required_files = ["required.txt"]
+revision = "{source_revision}"
 ''' if required_source else ""
     (repository / "plugin.toml").write_text(
         f'''schema_version = 1
@@ -99,6 +106,32 @@ class RepositoryAdapterTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(GameUnavailableError, "submodule update"):
+                adapter._load_adapter()
+
+    def test_mismatched_required_source_revision_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository_root = write_repository(
+                root,
+                required_source=True,
+                source_revision="a" * 40,
+            )
+            source = repository_root / "decomp_reference" / "data"
+            source.mkdir(parents=True)
+            (source / "required.txt").write_text("data", encoding="utf-8")
+            (source / ".git").write_text("gitdir: elsewhere", encoding="utf-8")
+            repository = discover_plugin_repositories((root,)).repositories[0]
+            adapter = RepositoryAdapter(
+                repository, GameContext(repository_root=repository_root)
+            )
+
+            with (
+                patch(
+                    "retroarch_overlay.infrastructure.plugin_loader.subprocess.run",
+                    return_value=Mock(returncode=0, stdout="b" * 40 + "\n"),
+                ),
+                self.assertRaisesRegex(GameUnavailableError, "expected"),
+            ):
                 adapter._load_adapter()
 
 

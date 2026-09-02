@@ -22,6 +22,7 @@ class PanelAction:
     label: str
     title: str
     rows: tuple[PanelRow, ...]
+    compact: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +32,54 @@ class PanelSection:
     preview_limit: int | None = None
     alert: bool = False
     actions: tuple[PanelAction, ...] = ()
+    priority: int = 50
+    role: str = "context"
+    compact_rows: tuple[PanelRow, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class GameDisplaySpec:
+    layout_key: str
+    native_width: int
+    native_height: int
+    scaling: str = "fit"
+    preferred_integer_scale: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ScreenRect:
+    left: int
+    top: int
+    right: int
+    bottom: int
+
+    @property
+    def width(self) -> int:
+        return max(0, self.right - self.left)
+
+    @property
+    def height(self) -> int:
+        return max(0, self.bottom - self.top)
+
+
+@dataclass(frozen=True, slots=True)
+class LayoutProfile:
+    mode: str = "auto"
+    rail_side: str = "right"
+    rail_width: int = 360
+    density: str = "compact"
+    game_scaling: str = "auto"
+    manage_retroarch_window: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class WindowGeometry:
+    handle: int
+    window_rect: ScreenRect
+    client_rect: ScreenRect
+    work_area: ScreenRect
+    dpi: int = 96
+    resizable: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +99,7 @@ class MapWaypoint:
     detail: str = ""
     kind: str = "point"
     completed: bool = False
+    marker: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,3 +158,4 @@ class OverlaySnapshot:
     supports_caught_filter: bool = False
     map_document: MapDocument | None = None
     map_overlays: tuple[MapOverlay, ...] = ()
+    display_spec: GameDisplaySpec | None = None

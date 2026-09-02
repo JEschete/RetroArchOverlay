@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from retroarch_overlay.local_settings import LocalPluginSettings
+from retroarch_overlay.models import LayoutProfile, ScreenRect
 
 
 class LocalPluginSettingsTests(unittest.TestCase):
@@ -109,6 +110,37 @@ class LocalPluginSettingsTests(unittest.TestCase):
             self.assertIsNone(
                 LocalPluginSettings(path).detail_window_position("Emerald|POC")
             )
+
+    def test_saves_layout_and_window_geometry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = LocalPluginSettings(Path(directory) / "local_settings.json")
+            profile = LayoutProfile(
+                mode="rail",
+                rail_side="left",
+                rail_width=380,
+                density="normal",
+                game_scaling="integer",
+            )
+            rect = ScreenRect(10, 20, 390, 900)
+
+            settings.save_layout_profile(profile)
+            settings.save_window_geometry("main", rect)
+            settings.save_high_contrast_override(True)
+            reloaded = LocalPluginSettings(settings.path)
+
+            self.assertEqual(reloaded.layout_profile(), profile)
+            self.assertEqual(reloaded.window_geometry("main"), rect)
+            self.assertTrue(reloaded.high_contrast_override())
+
+    def test_malformed_json_falls_back_to_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "local_settings.json"
+            path.write_text("{broken", encoding="utf-8")
+
+            settings = LocalPluginSettings(path)
+
+            self.assertEqual(settings.layout_profile(), LayoutProfile())
+            self.assertIsNone(settings.rom_path("org.example.game"))
 
 
 if __name__ == "__main__":

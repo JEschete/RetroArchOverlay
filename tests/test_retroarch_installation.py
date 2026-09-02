@@ -2,7 +2,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from retroarch_overlay.retroarch_installation import supported_cores_for_console
+from retroarch_overlay.retroarch_installation import (
+    network_commands_enabled,
+    set_network_commands_enabled,
+    supported_cores_for_console,
+)
 
 
 class RetroArchInstallationTests(unittest.TestCase):
@@ -38,6 +42,56 @@ class RetroArchInstallationTests(unittest.TestCase):
         self.assertIn("nes", cores)
         self.assertIn("mesen", cores)
         self.assertNotIn("mgba", cores)
+
+    def test_enables_network_commands_and_preserves_other_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "retroarch.cfg"
+            path.write_text(
+                'video_fullscreen = "true"\n'
+                'network_cmd_enable = "false"\n'
+                'network_cmd_port = "12345"\n',
+                encoding="utf-8",
+            )
+
+            changed = set_network_commands_enabled(path, True, 55355)
+
+            self.assertTrue(changed)
+            self.assertTrue(network_commands_enabled(path, 55355))
+            self.assertIn(
+                'video_fullscreen = "true"', path.read_text(encoding="utf-8")
+            )
+
+    def test_network_command_update_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "retroarch.cfg"
+            path.write_text(
+                'network_cmd_enable = "true"\nnetwork_cmd_port = "55355"\n',
+                encoding="utf-8",
+            )
+
+            self.assertFalse(set_network_commands_enabled(path, True, 55355))
+
+    def test_appends_missing_network_command_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "retroarch.cfg"
+            path.write_text('video_driver = "gl"', encoding="utf-8")
+
+            set_network_commands_enabled(path, True, 55355)
+
+            self.assertTrue(network_commands_enabled(path, 55355))
+
+    def test_disables_network_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "retroarch.cfg"
+            path.write_text(
+                'network_cmd_enable = "true"\nnetwork_cmd_port = "55355"\n',
+                encoding="utf-8",
+            )
+
+            changed = set_network_commands_enabled(path, False, 55355)
+
+            self.assertTrue(changed)
+            self.assertFalse(network_commands_enabled(path, 55355))
 
 
 if __name__ == "__main__":

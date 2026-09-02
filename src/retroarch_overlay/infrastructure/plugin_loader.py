@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import re
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -106,3 +107,23 @@ def _preflight_sources(repository: DiscoveredPluginRepository) -> None:
                 f"required source {source.source_id!r} is incomplete"
                 f"{f': {details}' if details else ''}; run: {command}"
             )
+        if source.revision and (source_root / ".git").exists():
+            try:
+                result = subprocess.run(
+                    ("git", "-C", str(source_root), "rev-parse", "HEAD"),
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise GameUnavailableError(
+                    f"could not verify required source {source.source_id!r}: {error}"
+                ) from error
+            revision = result.stdout.strip().casefold()
+            if result.returncode or revision != source.revision.casefold():
+                raise GameUnavailableError(
+                    f"required source {source.source_id!r} is at "
+                    f"{revision or 'an unknown revision'}; expected {source.revision}; "
+                    f"run: git -C {root} submodule update --init --recursive"
+                )

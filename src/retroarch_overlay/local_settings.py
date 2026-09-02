@@ -2,6 +2,8 @@ import json
 import os
 from pathlib import Path
 
+from .core.models import LayoutProfile, ScreenRect
+
 
 def default_local_settings_path() -> Path:
     local_app_data = os.environ.get("LOCALAPPDATA")
@@ -46,6 +48,74 @@ class LocalPluginSettings:
         if not isinstance(y, int) or isinstance(y, bool):
             return None
         return x, y
+
+    def layout_profile(self) -> LayoutProfile:
+        value = self._document().get("layout_profile", {})
+        if not isinstance(value, dict):
+            return LayoutProfile()
+        return LayoutProfile(
+            mode=_string(value.get("mode"), "auto"),
+            rail_side=_string(value.get("rail_side"), "right"),
+            rail_width=_integer(value.get("rail_width"), 360),
+            density=_string(value.get("density"), "compact"),
+            game_scaling=_string(value.get("game_scaling"), "auto"),
+            manage_retroarch_window=_boolean(
+                value.get("manage_retroarch_window"), True
+            ),
+        )
+
+    def save_layout_profile(self, profile: LayoutProfile) -> None:
+        document = self._document()
+        document["layout_profile"] = {
+            "mode": profile.mode,
+            "rail_side": profile.rail_side,
+            "rail_width": profile.rail_width,
+            "density": profile.density,
+            "game_scaling": profile.game_scaling,
+            "manage_retroarch_window": profile.manage_retroarch_window,
+        }
+        self._write(document)
+
+    def window_geometry(self, key: str) -> ScreenRect | None:
+        values = self._document().get("window_geometries", {})
+        if not isinstance(values, dict):
+            return None
+        value = values.get(key)
+        if not isinstance(value, dict):
+            return None
+        coordinates = tuple(value.get(name) for name in ("left", "top", "right", "bottom"))
+        if not all(isinstance(item, int) and not isinstance(item, bool) for item in coordinates):
+            return None
+        left, top, right, bottom = coordinates
+        if right <= left or bottom <= top:
+            return None
+        return ScreenRect(left, top, right, bottom)
+
+    def save_window_geometry(self, key: str, rect: ScreenRect) -> None:
+        document = self._document()
+        values = document.setdefault("window_geometries", {})
+        if not isinstance(values, dict):
+            values = {}
+            document["window_geometries"] = values
+        values[key] = {
+            "left": rect.left,
+            "top": rect.top,
+            "right": rect.right,
+            "bottom": rect.bottom,
+        }
+        self._write(document)
+
+    def high_contrast_override(self) -> bool | None:
+        value = self._document().get("high_contrast")
+        return value if isinstance(value, bool) else None
+
+    def save_high_contrast_override(self, value: bool | None) -> None:
+        document = self._document()
+        if value is None:
+            document.pop("high_contrast", None)
+        else:
+            document["high_contrast"] = value
+        self._write(document)
 
     def save_detail_window_position(self, key: str, x: int, y: int) -> None:
         document = self._document()
@@ -110,7 +180,10 @@ class LocalPluginSettings:
     def _document(self) -> dict[str, object]:
         if not self.path.is_file():
             return {"schema_version": 1, "plugins": {}}
-        document = json.loads(self.path.read_text(encoding="utf-8"))
+        try:
+            document = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {"schema_version": 1, "plugins": {}}
         if not isinstance(document, dict):
             raise ValueError(f"Local settings must contain a JSON object: {self.path}")
         return document
@@ -118,3 +191,15 @@ class LocalPluginSettings:
     def _write(self, document: dict[str, object]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+
+
+def _string(value: object, default: str) -> str:
+    return value if isinstance(value, str) and value else default
+
+
+def _integer(value: object, default: int) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else default
+
+
+def _boolean(value: object, default: bool) -> bool:
+    return value if isinstance(value, bool) else default

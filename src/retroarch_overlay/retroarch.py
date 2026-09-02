@@ -1,4 +1,5 @@
 import socket
+import threading
 
 from .core.contracts import MemoryReader
 from .core.models import RetroArchStatus
@@ -46,19 +47,42 @@ class RetroArchClient:
         self.host = host
         self.port = port
         self.timeout = timeout
+        self._connection: socket.socket | None = None
+        self._lock = threading.Lock()
+
+    def close(self) -> None:
+        with self._lock:
+            self._close_connection()
+
+    def _close_connection(self) -> None:
+        if self._connection is not None:
+            self._connection.close()
+            self._connection = None
+
+    def _connected_socket(self) -> socket.socket:
+        if self._connection is None:
+            connection = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            connection.settimeout(self.timeout)
+            connection.connect((self.host, self.port))
+            self._connection = connection
+        return self._connection
 
     def _request(self, command: str) -> str:
         verb = command.partition(" ")[0]
         if verb not in self._ALLOWED_COMMANDS:
             raise RetroArchError(f"Command is not permitted: {verb}")
 
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as connection:
-            connection.settimeout(self.timeout)
-            connection.sendto(command.encode("ascii"), (self.host, self.port))
+        with self._lock:
+            connection = self._connected_socket()
             try:
-                response, _ = connection.recvfrom(65_535)
-            except TimeoutError as error:
-                raise RetroArchError("RetroArch did not respond") from error
+                connection.send(command.encode("ascii"))
+                response = connection.recv(65_535)
+            except (OSError, TimeoutError) as error:
+                self._close_connection()
+                raise RetroArchError(
+                    f"RetroArch is not listening on {self.host}:{self.port}. "
+                    "Enable Settings > Network > Network Commands and restart RetroArch."
+                ) from error
         return response.decode("ascii", errors="replace")
 
     def get_status(self) -> RetroArchStatus:

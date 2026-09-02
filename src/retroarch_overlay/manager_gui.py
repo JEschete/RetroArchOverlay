@@ -28,6 +28,10 @@ from .ra_plugin_metadata import (
     discover_plugin_ra_metadata,
     import_code_notes_pages,
 )
+from .retroarch_installation import (
+    network_commands_enabled,
+    set_network_commands_enabled,
+)
 
 
 COLORS = {
@@ -68,6 +72,7 @@ class PluginManagerWindow:
             value=str(configured_retroarch) if configured_retroarch is not None else ""
         )
         self.retroarch_config_status = tk.StringVar()
+        self.network_commands_enabled = tk.BooleanVar(value=False)
         self.fields = {
             "game_name": tk.StringVar(),
             "slug": tk.StringVar(),
@@ -309,8 +314,14 @@ class PluginManagerWindow:
         ttk.Label(form, textvariable=self.retroarch_config_status, style="Meta.TLabel").grid(
             row=1, column=1, sticky="w", pady=(0, 12)
         )
+        self.network_commands_toggle = ttk.Checkbutton(
+            form,
+            text="Enable RetroArch network commands",
+            variable=self.network_commands_enabled,
+        )
+        self.network_commands_toggle.grid(row=2, column=1, sticky="w", pady=(0, 12))
         ttk.Button(form, text="Save settings", style="Accent.TButton", command=self._save_settings).grid(
-            row=2, column=1, sticky="w"
+            row=3, column=1, sticky="w"
         )
         form.columnconfigure(1, weight=1)
         self._sync_retroarch_status()
@@ -877,8 +888,22 @@ class PluginManagerWindow:
         value = self.retroarch_path.get().strip()
         try:
             self.local_settings.save_retroarch_path(Path(value) if value else None)
+            network_changed = False
+            config = (
+                Path(value).expanduser() / "retroarch.cfg"
+                if value
+                else default_retroarch_config()
+            )
+            if hasattr(self, "network_commands_enabled") and config.is_file():
+                network_changed = set_network_commands_enabled(
+                    config, self.network_commands_enabled.get()
+                )
             self._sync_retroarch_status()
-            self.status.set("Saved local settings")
+            self.status.set(
+                "Saved settings; restart RetroArch"
+                if network_changed
+                else "Saved local settings"
+            )
         except Exception as error:
             self._show_error("Unable to save settings", error)
 
@@ -886,11 +911,17 @@ class PluginManagerWindow:
         value = self.retroarch_path.get().strip()
         if not value:
             self.retroarch_config_status.set("Using automatic RetroArch config discovery")
-            return
-        config = Path(value).expanduser() / "retroarch.cfg"
+            config = default_retroarch_config()
+        else:
+            config = Path(value).expanduser() / "retroarch.cfg"
         self.retroarch_config_status.set(
             f"Config: {config}" if config.is_file() else "retroarch.cfg was not found in this folder"
         )
+        if hasattr(self, "network_commands_enabled"):
+            self.network_commands_enabled.set(network_commands_enabled(config))
+        toggle = getattr(self, "network_commands_toggle", None)
+        if toggle is not None:
+            toggle.configure(state="normal" if config.is_file() else "disabled")
 
     def _show_manifest(self, path: Path) -> None:
         self._set_manifest_text(path.read_text(encoding="utf-8"))

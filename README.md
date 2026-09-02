@@ -2,6 +2,23 @@
 
 Read-only Tk overlay for RetroArch memory data. Game behavior is loaded from standalone plugin repositories, including Dragon Warrior III and Pokemon Emerald.
 
+## Smart Layouts
+
+Installed plugins declare their native display geometry. On Windows, the overlay locates the RetroArch client area and selected monitor work area, then applies an aspect-aware companion layout:
+
+- Windowed, resizable RetroArch uses a side rail and restores the original emulator window geometry when the overlay exits.
+- Borderless or exclusive-fullscreen content uses existing pillarbox space as compact side strips when those strips are wide enough.
+- Narrow displays fall back to a movable overlay instead of producing unusable strips.
+- Pausing in Auto mode opens the larger pause-drawer layout.
+- Game Boy Advance defaults to integer-perfect `240x160` scaling, preferring `6x` (`1440x960`) on a 1080p display.
+- 4:3 content remains aspect-correct and uses the wider side space available on 16:9 monitors.
+
+Use the gear button in the overlay header to choose Auto, Rail, Dual Strips, or Overlay mode; rail side and width; compact or normal density; integer or fit scaling; emulator-window management; and high contrast. Layout and main/map/detail window geometry are saved under `%LOCALAPPDATA%/RetroArchOverlay/local_settings.json`.
+
+Keyboard access includes `Tab`/`Shift+Tab` for controls, `Escape` to collapse or expand, `Alt+M` for the map, `Alt+N` for the minimap, and `Page Up`/`Page Down` for scrolling.
+
+Runtime diagnostics are written to `%LOCALAPPDATA%/RetroArchOverlay/logs/retroarch-overlay.log` with bounded rotation. `--log-level`, `--retroarch-timeout`, and `--snapshot-interval` tune diagnostics and polling without source changes.
+
 The project is migrating to a blank core harness with each game maintained as a standalone Git plugin repository. See [ARCHITECTURE_PLAN.md](ARCHITECTURE_PLAN.md) for the filesystem discovery, repository ownership, and decomp-submodule design.
 
 The parent framework is licensed under Apache-2.0 for its explicit patent grant. MIT is the recommended default for locally authored plugin code. Plugin licenses do not cover ROMs, third-party assets, patches, trademarks, or repositories under `decomp_reference`; each plugin must document those separately.
@@ -41,7 +58,7 @@ Review [DMCA_AUDIT.md](DMCA_AUDIT.md) and each plugin's rights/provenance report
 
 Run `launch_gui.cmd` to create its virtual environment when needed, install missing runtime dependencies, and open the manager. The Available games picker loads the trusted `JEschete/RAO_catalog` manifest, marks installed games, and clones a selected game only after Install is pressed. Its live search filters case-insensitively across game names, slugs, and plugin IDs, supports multiple search terms, and can be cleared to restore the full catalog. The last valid catalog is cached under `%LOCALAPPDATA%/RetroArchOverlay` for offline use. `RETROARCH_OVERLAY_CATALOG` may select another trusted HTTPS catalog URL or local catalog file, and Install from URL remains available for an explicitly supplied third-party repository. Catalog installs verify the cloned plugin ID and slug before accepting the checkout.
 
-The manager can inspect and edit manifests, retain a machine-local path to each ROM without copying it into a repository, apply clean fast-forward updates, synchronize submodules, delete plugins with confirmation, discover public RetroAchievements game metadata and supported hashes, import saved authenticated code-note pages, open repositories, and start the overlay. The global Settings command in the application header accepts the local RetroArch installation folder containing `retroarch.cfg`; it is independent of plugin selection. Discovery uses the RetroAchievements console name to populate stable platform aliases and enriches them with matching installed cores found under the selected installation's `info` folder. Local ROM and RetroArch paths are stored outside Git in `%LOCALAPPDATA%/RetroArchOverlay/local_settings.json`. The same template operations are available without Tk:
+The manager can inspect and edit manifests, retain a machine-local path to each ROM without copying it into a repository, apply clean fast-forward updates, synchronize submodules, delete plugins with confirmation, discover public RetroAchievements game metadata and supported hashes, import saved authenticated code-note pages, open repositories, and start the overlay. The global Settings command in the application header accepts the local RetroArch installation folder containing `retroarch.cfg`; it is independent of plugin selection. Settings also has an **Enable RetroArch network commands** checkbox. Save the setting and restart RetroArch after changing it. Discovery uses the RetroAchievements console name to populate stable platform aliases and enriches them with matching installed cores found under the selected installation's `info` folder. Local ROM and RetroArch paths are stored outside Git in `%LOCALAPPDATA%/RetroArchOverlay/local_settings.json`. The same template operations are available without Tk:
 
 ```powershell
 rao-plugin create `

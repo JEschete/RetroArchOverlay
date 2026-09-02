@@ -1,4 +1,6 @@
 from .core.models import (
+    GameDisplaySpec,
+    LayoutProfile,
     MapDocument,
     MapLayer,
     MapOverlay,
@@ -10,9 +12,13 @@ from .core.models import (
     PanelRow,
     PanelSection,
     RetroArchStatus,
+    ScreenRect,
+    WindowGeometry,
 )
 
 __all__ = [
+    "GameDisplaySpec",
+    "LayoutProfile",
     "MapDocument",
     "MapLayer",
     "MapOverlay",
@@ -24,4 +30,6 @@ __all__ = [
     "PanelRow",
     "PanelSection",
     "RetroArchStatus",
+    "ScreenRect",
+    "WindowGeometry",
 ]

@@ -1,3 +1,4 @@
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -8,16 +9,21 @@ from retroarch_overlay.manager_gui import PluginManagerWindow
 from retroarch_overlay.models import MapDocument, MapLayer, MapPosition, MapWaypoint, OverlaySnapshot, PanelAction, PanelRow, PanelSection, RetroArchStatus
 from retroarch_overlay.plugin_catalog import PluginCatalogEntry
 from retroarch_overlay.ra_plugin_metadata import RAGameSelectionRequired
+from retroarch_overlay.retroarch_installation import network_commands_enabled
 from retroarch_overlay.ui import (
     append_map_path,
+    clamp_overlay_size,
     CoordinateMapWindow,
     SnapshotCadence,
     filter_caught_sections,
     map_source_point,
     map_layer_for_position,
     map_viewport,
+    mouse_wheel_units,
+    party_detail_row_role,
     preview_section_rows,
     project_map_point,
+    record_map_path,
     tracked_map_position,
     waypoint_source_point,
     wrapped_map_delta,
@@ -147,6 +153,30 @@ class PluginManagerRATests(unittest.TestCase):
         manager._sync_retroarch_status.assert_called_once_with()
         manager.status.set.assert_called_once_with("Saved local settings")
 
+    def test_saves_network_command_checkbox_to_retroarch_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            retroarch = Path(directory)
+            config = retroarch / "retroarch.cfg"
+            config.write_text(
+                'network_cmd_enable = "false"\nnetwork_cmd_port = "55355"\n',
+                encoding="utf-8",
+            )
+            manager = PluginManagerWindow.__new__(PluginManagerWindow)
+            manager.retroarch_path = Mock()
+            manager.retroarch_path.get.return_value = str(retroarch)
+            manager.network_commands_enabled = Mock()
+            manager.network_commands_enabled.get.return_value = True
+            manager.local_settings = Mock()
+            manager._sync_retroarch_status = Mock()
+            manager.status = Mock()
+
+            manager._save_settings()
+
+            self.assertTrue(network_commands_enabled(config))
+            manager.status.set.assert_called_once_with(
+                "Saved settings; restart RetroArch"
+            )
+
     def test_create_uses_generated_plugin_id_for_local_paths(self) -> None:
         manager = PluginManagerWindow.__new__(PluginManagerWindow)
         values = {
@@ -227,8 +257,132 @@ class CaughtFilterTests(unittest.TestCase):
         self.assertEqual(expanded, section.rows)
         self.assertEqual(expanded_hidden_count, 0)
 
+    def test_main_overlay_keeps_all_roles_and_real_species_rows(self) -> None:
+        overlay = OverlayWindow.__new__(OverlayWindow)
+        overlay._hide_caught = Mock()
+        overlay._hide_caught.get.return_value = False
+        overlay._expanded_sections = set()
+        snapshot = OverlaySnapshot(
+            "Pokemon Emerald",
+            "Route 104",
+            (
+                PanelSection(
+                    "Party",
+                    (PanelRow("Marshtomp"),),
+                    role="party",
+                    compact_rows=(PanelRow("6 Pokemon"),),
+                ),
+                PanelSection(
+                    "Goals",
+                    (PanelRow("Catch Marill"),),
+                    role="goals",
+                    compact_rows=(PanelRow("1 goal"),),
+                ),
+                PanelSection(
+                    "Water",
+                    (PanelRow("Marill Lv 5-15 60%"), PanelRow("Wingull Lv 10 40%")),
+                    role="area",
+                    compact_rows=(PanelRow("2 species"),),
+                ),
+            ),
+        )
+
+        views = overlay._section_views(snapshot)
+
+        self.assertEqual(
+            tuple(section.title for section, _, _, _ in views),
+            ("Party", "Goals", "Water"),
+        )
+        water_rows = next(rows for section, rows, _, _ in views if section.title == "Water")
+        self.assertEqual(
+            tuple(row.text for row in water_rows),
+            ("Marill Lv 5-15 60%", "Wingull Lv 10 40%"),
+        )
+
+
+class MainPanelInteractionTests(unittest.TestCase):
+    def test_resize_is_bounded_by_minimum_and_screen(self) -> None:
+        self.assertEqual(clamp_overlay_size(100, 100, 1920, 1080), (280, 180))
+        self.assertEqual(
+            clamp_overlay_size(4000, 3000, 1920, 1080),
+            (1896, 1056),
+        )
+        self.assertEqual(clamp_overlay_size(480, 640, 1920, 1080), (480, 640))
+
+    def test_mouse_wheel_is_normalized_for_windows_and_x11(self) -> None:
+        self.assertEqual(mouse_wheel_units(Mock(delta=120, num=0)), -1)
+        self.assertEqual(mouse_wheel_units(Mock(delta=-240, num=0)), 2)
+        self.assertEqual(mouse_wheel_units(Mock(delta=0, num=4)), -1)
+        self.assertEqual(mouse_wheel_units(Mock(delta=0, num=5)), 1)
+
+    def test_content_refresh_never_changes_native_window_geometry(self) -> None:
+        overlay = OverlayWindow.__new__(OverlayWindow)
+        overlay._collapsed = False
+        overlay.root = Mock()
+        overlay.canvas = Mock()
+        overlay.canvas.bbox.return_value = (0, 0, 480, 1200)
+
+        overlay._resize_to_content()
+
+        overlay.root.geometry.assert_not_called()
+        overlay.canvas.configure.assert_called_once_with(
+            scrollregion=(0, 0, 480, 1200)
+        )
+
+    def test_native_configure_records_size_without_reasserting_geometry(self) -> None:
+        overlay = OverlayWindow.__new__(OverlayWindow)
+        overlay.root = Mock()
+        overlay.root.winfo_screenwidth.return_value = 1920
+        overlay.root.winfo_screenheight.return_value = 1080
+        overlay.canvas = Mock()
+        overlay.location_label = Mock()
+        overlay._section_labels = []
+        overlay._row_labels = []
+        overlay._window_initialized = True
+        overlay._collapsed = False
+        overlay._main_geometry_job = None
+        event = Mock(widget=overlay.root, width=520, height=700)
+
+        overlay._main_window_configured(event)
+
+        self.assertEqual(overlay._manual_dimensions, (520, 700))
+        self.assertEqual(overlay.WIDTH, 520)
+        overlay.root.geometry.assert_not_called()
+
 
 class DetailWindowTests(unittest.TestCase):
+    def test_party_detail_rows_have_explicit_visual_roles(self) -> None:
+        self.assertEqual(
+            party_detail_row_role(
+                "Zapdos | Electric/Flying | EXP 466,560 | 19,711 to Lv 73 | OT BB54"
+            ),
+            "pokemon",
+        )
+        self.assertEqual(party_detail_row_role("Stats | HP 219/219 | Atk 160"), "stats")
+        self.assertEqual(party_detail_row_role("DVs | HP 0 | Atk 12"), "dvs")
+        self.assertEqual(party_detail_row_role("Stat EXP | HP 2135 | Atk 2410"), "stat_exp")
+        self.assertEqual(party_detail_row_role("Moves | Thunder 10 PP"), "moves")
+
+    def test_party_detail_role_does_not_restyle_generic_rows(self) -> None:
+        self.assertEqual(party_detail_row_role("TODO | Find the Card Key"), "generic")
+
+    def test_completed_detail_rows_follow_hide_completed_toggle(self) -> None:
+        overlay = OverlayWindow.__new__(OverlayWindow)
+        overlay._hide_caught = Mock()
+        overlay._hide_caught.get.return_value = True
+        overlay._last_result = OverlaySnapshot(
+            "Game",
+            "Area",
+            (),
+            supports_caught_filter=True,
+        )
+
+        rows = overlay._detail_rows(
+            (PanelRow("Done", True), PanelRow("Open", False), PanelRow("Info"))
+        )
+
+        self.assertEqual(rows, (PanelRow("Open", False), PanelRow("Info")))
+
     def test_open_detail_window_refreshes_from_latest_snapshot_action(self) -> None:
         window = OverlayWindow.__new__(OverlayWindow)
         body = Mock()
@@ -285,6 +439,27 @@ class DetailWindowTests(unittest.TestCase):
             "Game|OPEN|Details", 123, 234
         )
         self.assertEqual(overlay._detail_windows, {})
+
+
+class StableLayoutTests(unittest.TestCase):
+    def test_walking_does_not_change_section_layout_signature(self) -> None:
+        overlay = OverlayWindow.__new__(OverlayWindow)
+        overlay._hide_caught = Mock()
+        overlay._hide_caught.get.return_value = False
+        overlay._active_layout = None
+        overlay._active_role = Mock()
+        overlay._active_role.get.return_value = "area"
+        overlay._layout_manager = Mock()
+        overlay._layout_manager.profile.density = "comfortable"
+        overlay._expanded_sections = set()
+        section = PanelSection("Current objective", (PanelRow("Keep going"),))
+        first = OverlaySnapshot("Game", "Main World · (10,10)", (section,))
+        second = OverlaySnapshot("Game", "Main World · (11,10)", (section,))
+
+        first_signature = overlay._layout_signature(overlay._section_views(first))
+        second_signature = overlay._layout_signature(overlay._section_views(second))
+
+        self.assertEqual(first_signature, second_signature)
 
     def test_detail_window_stays_open_during_same_game_battle_snapshot(self) -> None:
         overlay = OverlayWindow.__new__(OverlayWindow)
@@ -370,6 +545,15 @@ class MapProjectionTests(unittest.TestCase):
 
         self.assertEqual(points, [(10, 10), (11, 10), (10, 10)])
 
+    def test_hero_path_records_without_an_open_map_window(self) -> None:
+        paths = {}
+        document = MapDocument("Game", (self.wrapped_layer,))
+
+        record_map_path(document, MapPosition("Outside", 0, 10, 12, True), paths)
+        record_map_path(document, MapPosition("Outside", 0, 11, 12, True), paths)
+
+        self.assertEqual(paths, {"surface": [(120, 136), (136, 136)]})
+
     def test_panned_marker_uses_shortest_wrapped_distance(self) -> None:
         self.assertEqual(wrapped_map_delta(10, 20, 256), -10)
         self.assertEqual(wrapped_map_delta(250, 5, 256), -11)
@@ -426,6 +610,68 @@ class MapProjectionTests(unittest.TestCase):
         self.assertIs(second, converted)
         loader.assert_called_once_with()
         open_image.assert_called_once_with(image_path)
+
+    def test_map_image_cache_evicts_and_closes_oldest_image(self) -> None:
+        images = [Mock() for _ in range(5)]
+        cache = {}
+
+        for index, image in enumerate(images):
+            CoordinateMapWindow._store_cached_image(cache, index, image)
+
+        self.assertEqual(tuple(cache), (1, 2, 3, 4))
+        images[0].close.assert_called_once_with()
+        for image in images[1:]:
+            image.close.assert_not_called()
+
+    def test_hidden_map_updates_state_without_redrawing(self) -> None:
+        document = MapDocument("Game", (self.wrapped_layer,))
+        window = CoordinateMapWindow.__new__(CoordinateMapWindow)
+        window.document = document
+        window.position = None
+        window._indoor_map_id = None
+        window._overlay_waypoints = {}
+        window.mode = Mock()
+        window.window = Mock()
+        window.window.state.return_value = "withdrawn"
+        window._destroyed = False
+        window._redraw = Mock()
+
+        position = MapPosition("Outside", 0, 10, 12, True)
+        window.update(position)
+
+        self.assertEqual(window.position, position)
+        window._redraw.assert_not_called()
+
+    def test_visible_fit_map_updates_only_dynamic_items_while_walking(self) -> None:
+        document = MapDocument("Game", (self.wrapped_layer,))
+        window = CoordinateMapWindow.__new__(CoordinateMapWindow)
+        window.document = document
+        window.layers = {self.wrapped_layer.key: self.wrapped_layer}
+        window.compact = False
+        window.zoom = 1
+        window.position = MapPosition("Outside", 0, 10, 12, True)
+        window._indoor_map_id = None
+        window._overlay_waypoints = {}
+        window._photo = Mock()
+        window.mode = Mock()
+        window.mode.get.return_value = self.wrapped_layer.key
+        window._is_visible = Mock(return_value=True)
+        window._update_dynamic_items = Mock()
+        window._redraw = Mock()
+
+        window.update(MapPosition("Outside", 0, 11, 12, True))
+
+        window._update_dynamic_items.assert_called_once_with()
+        window._redraw.assert_not_called()
+
+    def test_path_runs_are_chunked_into_bounded_canvas_items(self) -> None:
+        window = CoordinateMapWindow.__new__(CoordinateMapWindow)
+        window.canvas = Mock()
+
+        with patch.object(CoordinateMapWindow, "PATH_CHUNK_POINTS", 4):
+            window._create_path_run([(float(index), 0.0) for index in range(8)])
+
+        self.assertEqual(window.canvas.create_line.call_count, 3)
 
     def test_leaving_town_resumes_live_world_position(self) -> None:
         previous = MapPosition("World", 0, 53, 89, True)
