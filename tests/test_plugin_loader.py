@@ -19,7 +19,7 @@ def write_repository(root: Path, *, required_source: bool = False) -> Path:
 [[sources]]
 id = "data"
 kind = "git-submodule"
-path = "vendor/data"
+path = "decomp_reference/data"
 required = true
 required_files = ["required.txt"]
 ''' if required_source else ""

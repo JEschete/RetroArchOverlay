@@ -5,10 +5,10 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = PROJECT_ROOT / "src" / "retroarch_overlay"
+PLUGIN_ROOT = PROJECT_ROOT / "plugins"
 GAME_ROOTS = (
-    SOURCE_ROOT / "adapters" / "dragon_warrior_3",
-    SOURCE_ROOT / "adapters" / "emerald",
-    SOURCE_ROOT / "games",
+    PLUGIN_ROOT / "RAO_dragonwarrior3" / "game",
+    PLUGIN_ROOT / "RAO_pokeemerald" / "game",
 )
 FORBIDDEN_GAME_IMPORTS = frozenset(
     {
@@ -34,6 +34,21 @@ def imported_modules(path: Path) -> tuple[tuple[str, int], ...]:
 
 
 class ArchitectureBoundaryTests(unittest.TestCase):
+    def test_core_production_source_contains_no_dragon_plugin_knowledge(self) -> None:
+        violations = []
+        forbidden = (
+            "DragonWarrior3Adapter",
+            "dragon_warrior_3",
+            "Dragon Warrior III",
+            "Dragon Quest III",
+        )
+        for path in SOURCE_ROOT.rglob("*.py"):
+            content = path.read_text(encoding="utf-8")
+            for value in forbidden:
+                if value in content:
+                    violations.append(f"{path.relative_to(PROJECT_ROOT)} contains {value}")
+        self.assertEqual(violations, [])
+
     def test_core_production_source_contains_no_emerald_plugin_knowledge(self) -> None:
         violations = []
         forbidden = ("EmeraldAdapter", "adapters.emerald", "pokeemerald-root")
@@ -57,7 +72,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
 
     def test_adapters_use_core_ra_model_instead_of_compatibility_facade(self) -> None:
         violations = []
-        for root in GAME_ROOTS[:2]:
+        for root in GAME_ROOTS:
             for path in root.rglob("*.py"):
                 for module, level in imported_modules(path):
                     if level and module == "retroachievements":

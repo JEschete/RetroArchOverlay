@@ -24,6 +24,7 @@ TOP_LEVEL_KEYS = frozenset(
         "name",
         "api_version",
         "entry",
+        "license",
         "ra_game_id",
         "match",
         "options",
@@ -87,6 +88,7 @@ def parse_plugin_manifest(repository_root: Path) -> PluginRepositoryManifest:
         display_name=_required_string(document, "name"),
         api_version=api_version,
         entry=entry,
+        license_expression=_optional_string(document, "license"),
         ra_game_id=ra_game_id,
         supported_cores=frozenset(_string_list(match, "cores")),
         content_hints=tuple(_string_list(match, "content_hints")),
@@ -152,7 +154,9 @@ def _parse_option(value: Mapping[str, object], slug: str) -> GameOptionSpec:
 def _parse_source(root: Path, value: Mapping[str, object]) -> PluginSourceSpec:
     _reject_unknown_keys(
         value,
-        frozenset({"id", "kind", "path", "required", "required_files"}),
+        frozenset(
+            {"id", "kind", "path", "required", "required_files", "url", "revision"}
+        ),
         "source",
     )
     path = _contained_relative_path(root, _required_string(value, "path"), "source path")
@@ -166,6 +170,8 @@ def _parse_source(root: Path, value: Mapping[str, object]) -> PluginSourceSpec:
         path,
         _optional_bool(value, "required"),
         required_files,
+        _optional_string(value, "url"),
+        _optional_string(value, "revision"),
     )
 
 

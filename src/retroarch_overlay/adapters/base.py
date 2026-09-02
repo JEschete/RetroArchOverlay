@@ -2,14 +2,16 @@ import hashlib
 import zlib
 from importlib.metadata import entry_points
 from pathlib import Path
+from typing import Sequence
 
 from ..core.contracts import GameAdapter
 from ..core.models import RetroArchStatus
 
 
 class ContentHashResolver:
-    def __init__(self, roots: tuple[Path, ...] = ()):
+    def __init__(self, roots: tuple[Path, ...] = (), files: tuple[Path, ...] = ()):
         self._roots = roots
+        self._files = files
         self._cache: dict[tuple[str, str], str | None] = {}
 
     def resolve(self, status: RetroArchStatus) -> str | None:
@@ -22,6 +24,21 @@ class ContentHashResolver:
         content_path = Path(status.content)
         candidates = [content_path] if content_path.is_file() else []
         target_name = content_path.name.casefold()
+        configured_files = tuple(path for path in self._files if path.is_file())
+        matching_files = tuple(
+            path
+            for path in configured_files
+            if path.name.casefold() == target_name or path.stem.casefold() == target_name
+        )
+        if status.content_crc32:
+            local_candidates = configured_files
+        elif matching_files:
+            local_candidates = matching_files
+        elif len(configured_files) == 1:
+            local_candidates = configured_files
+        else:
+            local_candidates = ()
+        candidates.extend(path for path in local_candidates if path not in candidates)
         for root in self._roots:
             if root.is_dir():
                 candidates.extend(
@@ -48,6 +65,10 @@ class ContentHashResolver:
         checksum = f"{zlib.crc32(data[16:]):08x}"
         return ((digest, checksum), (digest, raw[1]))
 
+    @classmethod
+    def hashes_for_file(cls, path: Path) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(content_hash for content_hash, _crc32 in cls._hash_variants(path)))
+
     @staticmethod
     def _hash_file(path: Path) -> tuple[str, str]:
         digest = hashlib.md5(usedforsecurity=False)
@@ -62,7 +83,7 @@ class ContentHashResolver:
 class AdapterRegistry:
     def __init__(
         self,
-        adapters: list[GameAdapter] | None = None,
+        adapters: Sequence[GameAdapter] | None = None,
         hash_resolver: ContentHashResolver | None = None,
     ):
         self._adapters = list(adapters or [])

@@ -11,6 +11,11 @@ from .contracts import (
 from .errors import GameUnavailableError, PluginManifestError
 from .models import (
 	MapPosition,
+	MapDocument,
+	MapLayer,
+	MapOverlay,
+	MapRegion,
+	MapWaypoint,
 	OverlaySnapshot,
 	PanelAction,
 	PanelRow,
@@ -35,6 +40,11 @@ __all__ = [
 	"GamePlugin",
 	"GameUnavailableError",
 	"MapPosition",
+	"MapDocument",
+	"MapLayer",
+	"MapOverlay",
+	"MapRegion",
+	"MapWaypoint",
 	"MemoryReader",
 	"OverlaySnapshot",
 	"PanelAction",

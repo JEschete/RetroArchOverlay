@@ -12,13 +12,13 @@ No tracked Game Boy Advance or NES ROM was found in the core repository. The loc
 
 ### Dragon Warrior III maps
 
-- `resources/dragon_warrior_3/world.png`
-- `resources/dragon_warrior_3/underworld.png`
-- Credited in `resources/dragon_warrior_3/SOURCE.md` to Rick N. Bruns, version 1.5 (2012), hosted by VGMaps.
+- Local `RAO_dragonwarrior3/resources/world.png`
+- Local `RAO_dragonwarrior3/resources/underworld.png`
+- Credited in the local `RAO_dragonwarrior3/resources/SOURCE.md` to Rick N. Bruns, version 1.5 (2012), hosted by VGMaps.
 - No redistribution license or written permission is recorded in this repository.
 - The images reproduce the complete game worlds and therefore contain substantial expressive game-derived artwork.
 
-Risk classification: **high unresolved redistribution risk**. Attribution is not a license. Before publishing or migrating these images, obtain permission or replace them with independently authored maps that do not copy game artwork. The future Dragon Warrior III plugin must own both the assets and their provenance record.
+Risk classification: **high unresolved redistribution risk**. Attribution is not a license. The files have moved out of core into the plugin's ignored local resources directory and are not present on the current plugin branch. Before publishing them, obtain permission or replace them with independently authored maps that do not copy game artwork.
 
 ### Dragon Warrior III integration data
 
@@ -32,7 +32,7 @@ The plugin repository contains its own `RIGHTS_AND_PROVENANCE.md` with file-leve
 
 ### Locally authored Python
 
-The adapter and tests were migrated from this repository's JEschete-authored commits. This core repository has no declared software license, so no third-party reuse permission should be implied until the owner selects one.
+The adapter and tests were migrated from this repository's JEschete-authored commits. Locally authored plugin code is licensed under MIT. That license does not cover third-party game content, patches, decomps, or trademarks.
 
 ### `pret/pokeemerald` submodule
 
@@ -60,7 +60,7 @@ Risk classification: **unresolved provenance**. Its tiny size limits embedded ex
 
 ## Release Gates
 
-1. Select licenses for locally authored core and plugin code.
+1. Keep Apache-2.0 limited to the locally authored core and MIT limited to locally authored plugin code.
 2. Resolve or remove the Dragon Warrior III map images before public plugin publication.
 3. Decide whether the legal risk of the `pret/pokeemerald` submodule is acceptable.
 4. Resolve or remove the BPS patch's missing provenance.

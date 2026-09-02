@@ -1,6 +1,8 @@
 import json
 import re
 import time
+from dataclasses import dataclass
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlencode
@@ -20,6 +22,13 @@ USER_AGENT = "RetroArchOverlay/0.1"
 API_BASE_URL = "https://retroachievements.org/API"
 DEFAULT_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 MD5_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
+
+
+@dataclass(frozen=True, slots=True)
+class RAGameTitleMatch:
+    game: RAGameReference
+    score: float
+    exact: bool
 
 
 class RetroAchievementsClient:
@@ -102,6 +111,78 @@ class RetroAchievementsClient:
                 )
         scope = f"console {console_id}" if console_id is not None else "active game systems"
         raise RetroAchievementsError(f"No RetroAchievements game matched hash {normalized_hash} in {scope}")
+
+    def resolve_game_title(
+        self,
+        title: str,
+        *,
+        console_id: int | None = None,
+    ) -> RAGameReference:
+        matches = self.find_game_titles(title, console_id=console_id)
+        exact_matches = [match.game for match in matches if match.exact]
+        if len(exact_matches) == 1:
+            return exact_matches[0]
+        scope = f"console {console_id}" if console_id else "active game systems"
+        if not matches:
+            raise RetroAchievementsError(f"No RetroAchievements game matched title {title!r} in {scope}")
+        choices = ", ".join(f"{match.game.game_id}: {match.game.title}" for match in matches[:5])
+        raise RetroAchievementsError(f"RetroAchievements title {title!r} requires selection: {choices}")
+
+    def find_game_titles(
+        self,
+        title: str,
+        *,
+        console_id: int | None = None,
+        limit: int = 20,
+    ) -> tuple[RAGameTitleMatch, ...]:
+        normalized_title = _normalize_game_title(title)
+        if not normalized_title:
+            raise ValueError("Game title is required")
+        if limit <= 0:
+            raise ValueError("Title match limit must be positive")
+        consoles = (
+            (RAConsole(console_id, f"Console {console_id}"),)
+            if console_id is not None
+            else self.get_consoles()
+        )
+        matches: list[RAGameTitleMatch] = []
+        for console in consoles:
+            for entry in self.get_game_list(console.console_id):
+                candidate_title = str(entry.get("Title", ""))
+                candidate_normalized = _normalize_game_title(candidate_title)
+                score = SequenceMatcher(None, normalized_title, candidate_normalized).ratio()
+                exact = candidate_normalized == normalized_title
+                if exact or score >= 0.4:
+                    matches.append(
+                        RAGameTitleMatch(
+                            RAGameReference(
+                                int(entry["ID"]),
+                                candidate_title,
+                                int(entry.get("ConsoleID", console.console_id)),
+                                str(entry.get("ConsoleName", console.name)),
+                            ),
+                            1.0 if exact else score,
+                            exact,
+                        )
+                    )
+        matches.sort(key=lambda match: (-match.score, match.game.game_id))
+        return tuple(matches[:limit])
+
+    def get_game_hashes(self, game_id: int) -> tuple[str, ...]:
+        if game_id <= 0:
+            raise ValueError("Game ID must be positive")
+        document = self._get_json(
+            "API_GetGameHashes.php",
+            {"i": game_id},
+            cache_name=f"game-{game_id}-hashes.json",
+        )
+        if not isinstance(document, dict) or not isinstance(document.get("Results"), list):
+            raise RetroAchievementsError(f"Hash list for game {game_id} was not valid")
+        return tuple(
+            str(entry["MD5"]).casefold()
+            for entry in document["Results"]
+            if isinstance(entry, dict) and MD5_PATTERN.fullmatch(str(entry.get("MD5", "")))
+        )
 
     def get_game_extended(self, game_id: int) -> RAGame:
         if game_id <= 0:
@@ -209,6 +290,12 @@ def retroarch_setting(config_path: Path, name: str) -> str:
         re.MULTILINE,
     )
     return match.group(1) if match else ""
+
+
+def _normalize_game_title(value: str) -> str:
+    roman = {"ii": "2", "iii": "3", "iv": "4", "v": "5", "vi": "6"}
+    words = re.findall(r"[a-z0-9]+", value.casefold())
+    return " ".join(roman.get(word, word) for word in words)
 
 
 def load_ra_progress(

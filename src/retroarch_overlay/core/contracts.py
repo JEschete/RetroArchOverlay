@@ -45,6 +45,8 @@ class PluginSourceSpec:
     path: Path
     required: bool = False
     required_files: tuple[Path, ...] = ()
+    url: str = ""
+    revision: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +57,7 @@ class PluginRepositoryManifest:
     display_name: str
     api_version: int
     entry: Path
+    license_expression: str = ""
     ra_game_id: int | None = None
     supported_cores: frozenset[str] = frozenset()
     content_hints: tuple[str, ...] = ()
@@ -67,6 +70,7 @@ class PluginRepositoryManifest:
 class GameContext:
     settings: Mapping[str, object] = field(default_factory=dict)
     repository_root: Path | None = None
+    state_directory: Path | None = None
     ra_progress_provider: Callable[[int], RAProgress | None] | None = None
 
 

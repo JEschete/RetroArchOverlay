@@ -11,12 +11,13 @@ from .adapters import (
     AdapterRegistry,
     ContentHashResolver,
 )
-from .adapters.dragon_warrior_3 import DragonWarrior3Adapter
+from .cheeves import default_cache_dir
 from .core.contracts import GameContext
 from .infrastructure.plugin_discovery import discover_plugin_repositories
 from .infrastructure.plugin_loader import RepositoryAdapter
+from .local_settings import LocalPluginSettings
 from .retroarch import RetroArchClient
-from .retroachievements import clear_ra_api_key, get_ra_api_key, load_ra_progress
+from .retroachievements import BackgroundRAProgressProvider, clear_ra_api_key, get_ra_api_key
 from .ui import OverlayWindow
 
 
@@ -36,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--opacity", default=0.72, type=float)
     parser.add_argument("--plugin-dir", action="append", type=Path)
     parser.add_argument("--rom-root", action="append", type=Path)
+    parser.add_argument("--rom-path", action="append", type=Path)
     parser.add_argument("--retroarch-config", type=Path, default=default_retroarch_config())
     parser.add_argument("--reset-ra-key", action="store_true")
     return parser
@@ -50,34 +52,57 @@ def main() -> None:
     api_key = os.environ.get("RETROACHIEVEMENTS_API_KEY", "") or get_ra_api_key(
         args.retroarch_config
     )
-    dragon_progress = load_ra_progress(
-        args.retroarch_config,
-        DragonWarrior3Adapter.ra_game_id,
-        api_key,
-    )
     plugin_roots = tuple(args.plugin_dir or (Path(__file__).resolve().parents[2] / "plugins",))
     discovery = discover_plugin_repositories(plugin_roots)
     for error in discovery.errors:
         print(f"Plugin unavailable at {error.path}: {error.message}", file=sys.stderr)
-    progress_provider = lambda game_id: load_ra_progress(
-        args.retroarch_config, game_id, api_key
+    progress_provider = BackgroundRAProgressProvider(
+        args.retroarch_config,
+        api_key,
+        default_cache_dir() / "progress",
     )
+    local_settings = LocalPluginSettings()
+    plugin_rom_paths = {
+        repository.manifest.plugin_id: local_settings.rom_path(repository.manifest.plugin_id)
+        for repository in discovery.repositories
+    }
+    plugin_save_paths = {
+        repository.manifest.plugin_id: local_settings.save_path(repository.manifest.plugin_id)
+        for repository in discovery.repositories
+    }
     plugin_adapters = [
         RepositoryAdapter(
             repository,
             GameContext(
+                settings={
+                    key: value
+                    for key, value in (
+                        ("rom_path", plugin_rom_paths[repository.manifest.plugin_id]),
+                        ("save_path", plugin_save_paths[repository.manifest.plugin_id]),
+                    )
+                    if value is not None
+                },
                 repository_root=repository.repository_root,
+                state_directory=(
+                    local_settings.path.parent
+                    / "plugin-state"
+                    / repository.manifest.plugin_id
+                ),
                 ra_progress_provider=progress_provider,
             ),
         )
         for repository in discovery.repositories
     ]
     registry = AdapterRegistry(
-        [DragonWarrior3Adapter(dragon_progress), *plugin_adapters],
-        ContentHashResolver(rom_roots),
+        plugin_adapters,
+        ContentHashResolver(
+            rom_roots,
+            tuple(args.rom_path or ())
+            + tuple(path for path in plugin_rom_paths.values() if path is not None),
+        ),
     )
     registry.discover()
-    OverlayWindow(client, registry, args.opacity).run()
+    OverlayWindow(client, registry, args.opacity, local_settings).run()
 
 
 if __name__ == "__main__":

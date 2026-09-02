@@ -74,6 +74,41 @@ class ResponseParsingTests(unittest.TestCase):
             hashlib.md5(content, usedforsecurity=False).hexdigest(),
         )
 
+    def test_resolves_hash_from_exact_local_rom_path(self) -> None:
+        content = b"configured ROM"
+        with tempfile.TemporaryDirectory() as directory:
+            rom = Path(directory) / "locally configured game.nes"
+            rom.write_bytes(content)
+            status = RetroArchStatus("PLAYING", "example_core", "different display name", "")
+
+            resolved = ContentHashResolver(files=(rom,)).resolve(status)
+
+        self.assertEqual(resolved, hashlib.md5(content, usedforsecurity=False).hexdigest())
+
+    def test_exposes_headerless_nes_hash_for_ra_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            rom = Path(directory) / "subset.nes"
+            rom.write_bytes(b"NES\x1a" + bytes(12) + b"game content")
+
+            hashes = ContentHashResolver.hashes_for_file(rom)
+
+        self.assertEqual(
+            hashes,
+            (hashlib.md5(b"game content", usedforsecurity=False).hexdigest(),),
+        )
+
+    def test_does_not_guess_between_multiple_local_roms_without_crc_or_name_match(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / "first.nes"
+            second = Path(directory) / "second.nes"
+            first.write_bytes(b"first")
+            second.write_bytes(b"second")
+            status = RetroArchStatus("PLAYING", "example_core", "unknown game", "")
+
+            resolved = ContentHashResolver(files=(first, second)).resolve(status)
+
+        self.assertIsNone(resolved)
+
 
 if __name__ == "__main__":
     unittest.main()

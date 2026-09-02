@@ -7,6 +7,7 @@ name = "retroarch-overlay"
 version = "0.1.0"
 description = "Read-only, plugin-driven game information overlay for RetroArch"
 requires-python = ">=3.11"
+license = "Apache-2.0"
 dependencies = [
 	"keyring>=25.0",
 	"Pillow>=11.0",
@@ -20,6 +21,8 @@ dev = [
 [project.scripts]
 retroarch-overlay = "retroarch_overlay.main:main"
 retroarch-overlay-cheeves = "retroarch_overlay.cheeves:main"
+rao-plugin = "retroarch_overlay.plugin_generator:main"
+retroarch-overlay-manager = "retroarch_overlay.manager_gui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

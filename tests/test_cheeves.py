@@ -8,7 +8,11 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from retroarch_overlay.app.cheeves import export_cheeves_by_hash
-from retroarch_overlay.infrastructure.credentials import KeyringCredentialStore
+from retroarch_overlay.core.errors import RetroAchievementsError
+from retroarch_overlay.infrastructure.credentials import (
+    KeyringCredentialStore,
+    load_backlog_timer_credentials,
+)
 from retroarch_overlay.infrastructure.ra_code_notes import (
     SavedCodeNotesRepository,
     parse_code_notes_html,
@@ -28,8 +32,9 @@ class JsonResponse(BytesIO):
 
 
 class FakeRAOpener:
-    def __init__(self) -> None:
+    def __init__(self, *, ambiguous_title: bool = False) -> None:
         self.calls: list[tuple[str, str]] = []
+        self.ambiguous_title = ambiguous_title
 
     def __call__(self, request: object, **_kwargs: object) -> JsonResponse:
         parsed = urlparse(request.full_url)
@@ -45,8 +50,25 @@ class FakeRAOpener:
                     "ConsoleID": 5,
                     "ConsoleName": "Game Boy Advance",
                     "Hashes": [GAME_HASH],
-                }
+                },
+                {
+                    "ID": 1667,
+                    "Title": "Dragon Warrior III",
+                    "ConsoleID": 7,
+                    "ConsoleName": "NES",
+                    "Hashes": [],
+                },
             ]
+            if self.ambiguous_title:
+                document.append(
+                    {
+                        "ID": 9999,
+                        "Title": "Dragon Warrior 3",
+                        "ConsoleID": 7,
+                        "ConsoleName": "NES",
+                        "Hashes": [],
+                    }
+                )
         elif endpoint == "API_GetGameExtended.php" and game_or_console_id == "24186":
             document = {
                 "ID": 24186,
@@ -86,6 +108,13 @@ class FakeRAOpener:
                     }
                 },
             }
+        elif endpoint == "API_GetGameHashes.php" and game_or_console_id == "668":
+            document = {
+                "Results": [
+                    {"MD5": GAME_HASH, "Name": "Pokemon Emerald.gba"},
+                    {"MD5": "not-an-md5", "Name": "Ignored"},
+                ]
+            }
         else:
             raise AssertionError(f"Unexpected RA request: {endpoint}, {game_or_console_id}")
         return JsonResponse(json.dumps(document).encode("utf-8"))
@@ -114,6 +143,33 @@ class CredentialBoundaryTests(unittest.TestCase):
         self.assertEqual(store.get("PlayerOne"), "secret")
         store.delete("PlayerOne")
         self.assertEqual(store.get("PlayerOne"), "")
+
+    def test_loads_backlog_website_credentials_from_shared_keyring(self) -> None:
+        backend = FakeKeyringBackend()
+        backend.set_password("RAHLTBScraper", "username", "WebsitePlayer")
+        backend.set_password("RAHLTBScraper", "api_key", "website-key")
+
+        credentials = load_backlog_timer_credentials(backend=backend)
+
+        self.assertIsNotNone(credentials)
+        self.assertEqual(credentials.username, "WebsitePlayer")
+        self.assertEqual(credentials.api_key, "website-key")
+
+    def test_loads_backlog_website_file_when_keyring_is_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".ra_credentials.json"
+            path.write_text(
+                json.dumps({"username": "FilePlayer", "api_key": "file-key"}),
+                encoding="utf-8",
+            )
+
+            credentials = load_backlog_timer_credentials(
+                backend=FakeKeyringBackend(), fallback_path=path
+            )
+
+        self.assertIsNotNone(credentials)
+        self.assertEqual(credentials.username, "FilePlayer")
+        self.assertEqual(credentials.api_key, "file-key")
 
 
 class CodeNotesPageTests(unittest.TestCase):
@@ -188,6 +244,38 @@ class RetroAchievementsResearchTests(unittest.TestCase):
 
         self.assertEqual(game.game_id, 668)
         self.assertEqual(game.title, "Pokemon Emerald")
+
+    def test_get_game_hashes_uses_documented_public_endpoint(self) -> None:
+        opener = FakeRAOpener()
+        client = RetroAchievementsClient("PlayerOne", "api-key", opener=opener)
+
+        hashes = client.get_game_hashes(668)
+
+        self.assertEqual(hashes, (GAME_HASH,))
+        self.assertEqual(opener.calls, [("API_GetGameHashes.php", "668")])
+
+    def test_title_lookup_normalizes_basic_roman_numerals(self) -> None:
+        client = RetroAchievementsClient("PlayerOne", "api-key", opener=FakeRAOpener())
+
+        game = client.resolve_game_title("Dragon Warrior 3", console_id=7)
+
+        self.assertEqual(game.game_id, 1667)
+
+    def test_title_lookup_rejects_equal_ambiguous_matches(self) -> None:
+        client = RetroAchievementsClient(
+            "PlayerOne", "api-key", opener=FakeRAOpener(ambiguous_title=True)
+        )
+
+        with self.assertRaisesRegex(RetroAchievementsError, "requires selection"):
+            client.resolve_game_title("Dragon Warrior 3", console_id=7)
+
+    def test_inexact_title_lookup_returns_ranked_candidates(self) -> None:
+        client = RetroAchievementsClient("PlayerOne", "api-key", opener=FakeRAOpener())
+
+        matches = client.find_game_titles("Dragon Warrior", console_id=7)
+
+        self.assertEqual(matches[0].game.game_id, 1667)
+        self.assertFalse(matches[0].exact)
 
     def test_exports_parent_subset_achievements_and_saved_memory_notes(self) -> None:
         opener = FakeRAOpener()

@@ -1,16 +1,38 @@
 import queue
 import threading
+import time
 import tkinter as tk
 import webbrowser
-from pathlib import Path
 from tkinter import font as tkfont
 
 from PIL import Image, ImageChops, ImageTk
 
 from .adapters.base import AdapterRegistry
 from .core.errors import GameUnavailableError
-from .models import MapPosition, OverlaySnapshot, PanelAction, PanelRow, PanelSection
+from .models import MapDocument, MapLayer, MapOverlay, MapPosition, MapRegion, MapWaypoint, OverlaySnapshot, PanelAction, PanelRow, PanelSection
+from .local_settings import LocalPluginSettings
 from .retroarch import RetroArchClient, RetroArchError
+
+
+class SnapshotCadence:
+    def __init__(self, interval_seconds: float = 0.25) -> None:
+        self.interval_seconds = interval_seconds
+        self._content_key: tuple[str, str, str] | None = None
+        self._last_snapshot_at = 0.0
+
+    def should_snapshot(self, status: RetroArchStatus, now: float) -> bool:
+        if status.state not in {"PLAYING", "PAUSED"}:
+            self._content_key = None
+            return False
+        content_key = (status.core, status.content, status.content_crc32)
+        if content_key != self._content_key:
+            self._content_key = content_key
+            self._last_snapshot_at = now
+            return True
+        if status.state == "PAUSED" or now - self._last_snapshot_at < self.interval_seconds:
+            return False
+        self._last_snapshot_at = now
+        return True
 
 
 def filter_caught_sections(
@@ -65,10 +87,32 @@ def project_map_point(
     )
 
 
-def map_source_point(position: MapPosition, map_key: str) -> tuple[int, int]:
-    if map_key == "world":
-        return ((position.x - 3) % 256) * 16 + 8, ((position.y - 4) % 256) * 16 + 8
-    return position.x * 16 + 24, position.y * 16 + 24
+def map_source_point(position: MapPosition, layer: MapLayer) -> tuple[int, int]:
+    return (
+        ((position.x + layer.offset_x) % layer.wrap_width) * layer.tile_width
+        + layer.anchor_x,
+        ((position.y + layer.offset_y) % layer.wrap_height) * layer.tile_height
+        + layer.anchor_y,
+    )
+
+
+def waypoint_source_point(waypoint: MapWaypoint, layer: MapLayer) -> tuple[int, int]:
+    return (
+        ((waypoint.x + layer.offset_x) % layer.wrap_width) * layer.tile_width
+        + layer.anchor_x,
+        ((waypoint.y + layer.offset_y) % layer.wrap_height) * layer.tile_height
+        + layer.anchor_y,
+    )
+
+
+def append_map_path(
+    points: list[tuple[int, int]], point: tuple[int, int], limit: int = 50_000
+) -> None:
+    if points and points[-1] == point:
+        return
+    points.append(point)
+    if len(points) > limit:
+        del points[: len(points) - limit]
 
 
 def wrapped_map_delta(point: float, center: float, span: int) -> float:
@@ -81,19 +125,44 @@ def tracked_map_position(
     return current if current.is_world else previous
 
 
+def map_layer_for_position(
+    document: MapDocument, position: MapPosition
+) -> MapLayer | None:
+    if not position.is_world:
+        matching_id = next(
+            (layer for layer in document.layers if layer.map_id == position.map_id),
+            None,
+        )
+        if matching_id is not None:
+            return matching_id
+    return next(
+        (layer for layer in document.layers if layer.map_id is None and layer.area == position.area),
+        None,
+    )
+
+
 class CoordinateMapWindow:
     ZOOM_LEVELS = (1, 2, 4, 8, 16)
-    MAP_ROOT = Path(__file__).resolve().parents[2] / "resources" / "dragon_warrior_3"
-    MAPS = {
-        "world": ("Main World", MAP_ROOT / "world.png"),
-        "underworld": ("Alefgard", MAP_ROOT / "underworld.png"),
+    OVERLAY_LABELS = {
+        "player": "Player",
+        "path": "Hero's path",
+        "entrance": "Entrances",
+        "collectibles": "Collectibles",
+        "npcs": "NPCs",
+        "encounters": "Enemies",
     }
-    MAP_URLS = {
-        "world": "https://www.vgmaps.com/Atlas/NES/DragonWarriorIII-MainWorld.png",
-        "underworld": "https://www.vgmaps.com/Atlas/NES/DragonWarriorIII-WorldOfDarkness-Alefgard.png",
-    }
+    HIDDEN_OVERLAYS = frozenset(("path", "collectibles", "npcs", "encounters"))
 
-    def __init__(self, owner: tk.Tk, compact: bool = False) -> None:
+    def __init__(
+        self,
+        owner: tk.Tk,
+        document: MapDocument,
+        compact: bool = False,
+    ) -> None:
+        if not document.layers:
+            raise ValueError("Map document must contain at least one layer")
+        self.document = document
+        self.layers = {layer.key: layer for layer in document.layers}
         self.compact = compact
         self.position: MapPosition | None = None
         self._indoor_map_id: int | None = None
@@ -102,27 +171,41 @@ class CoordinateMapWindow:
         self._pan_drag_start = (0, 0)
         self._pan_drag_origin = (0.0, 0.0)
         self._photo: ImageTk.PhotoImage | None = None
-        self._images = {
-            key: Image.open(path).convert("RGB")
-            for key, (_, path) in self.MAPS.items()
+        self._images: dict[str, Image.Image] = {}
+        self._overlay_waypoints: dict[str, tuple[MapWaypoint, ...]] = {}
+        self._hero_paths: dict[str, list[tuple[int, int]]] = {}
+        available_kinds = (
+            set(document.overlay_kinds)
+            | {waypoint.kind for layer in document.layers for waypoint in layer.waypoints}
+            | {region.kind for layer in document.layers for region in layer.regions}
+            | {"player", "path"}
+        )
+        preferred_order = tuple(self.OVERLAY_LABELS)
+        waypoint_kinds = tuple(kind for kind in preferred_order if kind in available_kinds) + tuple(
+            sorted(available_kinds - set(preferred_order))
+        )
+        self.waypoint_visibility = {
+            kind: tk.BooleanVar(value=kind not in self.HIDDEN_OVERLAYS)
+            for kind in waypoint_kinds
         }
+        self.hide_completed_waypoints = tk.BooleanVar(value=False)
         self.window = tk.Toplevel(owner)
-        self.window.title("Dragon Warrior III Minimap" if compact else "Dragon Warrior III Map")
+        self.window.title(f"{document.title} {'Minimap' if compact else 'Map'}")
         self.window.attributes("-topmost", True)
         self.window.geometry("184x208" if compact else "760x800")
         if compact:
-            self.window.resizable(False, False)
+            self.window.minsize(160, 184)
         self.window.configure(background=OverlayWindow.BACKGROUND)
         self.window.protocol("WM_DELETE_WINDOW", self.hide)
-        self.mode = tk.StringVar(value="world")
+        self.mode = tk.StringVar(value=document.layers[0].key)
         if not compact:
             toolbar = tk.Frame(self.window, background=OverlayWindow.FOREGROUND, padx=10, pady=8)
             toolbar.pack(fill="x")
-            for value, (text, _) in self.MAPS.items():
+            for layer in (item for item in document.layers if item.map_id is None):
                 tk.Radiobutton(
                     toolbar,
-                    text=text.upper(),
-                    value=value,
+                    text=layer.title.upper(),
+                    value=layer.key,
                     variable=self.mode,
                     command=self._redraw,
                     indicatoron=False,
@@ -170,6 +253,51 @@ class CoordinateMapWindow:
                     font=("Segoe UI Semibold", 12),
                     width=2,
                 ).pack(side="right", padx=(4, 0))
+            overlay_bar = tk.Frame(
+                self.window,
+                background=OverlayWindow.FOREGROUND,
+                padx=10,
+                pady=(0, 7),
+            )
+            overlay_bar.pack(fill="x")
+            tk.Label(
+                overlay_bar,
+                text="OVERLAYS",
+                background=OverlayWindow.FOREGROUND,
+                foreground="#b9c1bc",
+                font=("Segoe UI Semibold", 8),
+            ).pack(side="left", padx=(0, 8))
+            for kind, visible in self.waypoint_visibility.items():
+                tk.Checkbutton(
+                    overlay_bar,
+                    text=self.OVERLAY_LABELS.get(kind, kind.replace("_", " ").title()),
+                    variable=visible,
+                    command=self._redraw,
+                    background=OverlayWindow.FOREGROUND,
+                    foreground="#ffffff",
+                    selectcolor=OverlayWindow.FOREGROUND,
+                    activebackground=OverlayWindow.FOREGROUND,
+                    activeforeground="#ffffff",
+                    borderwidth=0,
+                    font=("Segoe UI", 8),
+                    padx=3,
+                    pady=1,
+                ).pack(side="left", padx=(0, 6))
+            tk.Checkbutton(
+                overlay_bar,
+                text="Hide collected",
+                variable=self.hide_completed_waypoints,
+                command=self._redraw,
+                background=OverlayWindow.FOREGROUND,
+                foreground="#ffffff",
+                selectcolor=OverlayWindow.FOREGROUND,
+                activebackground=OverlayWindow.FOREGROUND,
+                activeforeground="#ffffff",
+                borderwidth=0,
+                font=("Segoe UI", 8),
+                padx=3,
+                pady=1,
+            ).pack(side="right")
         self.heading = tk.Label(
             self.window,
             background=OverlayWindow.BACKGROUND,
@@ -182,7 +310,7 @@ class CoordinateMapWindow:
         self.heading.pack(fill="x")
         self.credit = tk.Label(
             self.window,
-            text="Map by Rick N. Bruns · VGMaps · v1.5 (2012)",
+            text="",
             background=OverlayWindow.FOREGROUND,
             foreground="#d5ddd8",
             font=("Segoe UI", 8),
@@ -193,7 +321,7 @@ class CoordinateMapWindow:
         self.credit.pack(side="bottom", fill="x")
         self.credit.bind(
             "<Button-1>",
-            lambda _: webbrowser.open(self.MAP_URLS[self._map_key()]),
+            lambda _: self._open_source(),
         )
         self.canvas = tk.Canvas(
             self.window,
@@ -208,6 +336,61 @@ class CoordinateMapWindow:
             self.canvas.bind("<B1-Motion>", self._pan)
             self.canvas.bind("<ButtonRelease-1>", self._finish_pan)
         self.window.withdraw()
+
+    def _show_waypoint(self, waypoint: MapWaypoint, x: float, y: float) -> None:
+        self.canvas.delete("waypoint-tooltip")
+        text = waypoint.title + (f"\n{waypoint.detail}" if waypoint.detail else "")
+        label = self.canvas.create_text(
+            x + 10,
+            y - 10,
+            text=text,
+            anchor="sw",
+            justify="left",
+            fill="#ffffff",
+            font=("Segoe UI Semibold", 9),
+            tags=("waypoint-tooltip",),
+        )
+        bounds = self.canvas.bbox(label)
+        if bounds is not None:
+            background = self.canvas.create_rectangle(
+                bounds[0] - 6,
+                bounds[1] - 4,
+                bounds[2] + 6,
+                bounds[3] + 4,
+                fill="#20251f",
+                outline="#f8c24e",
+                tags=("waypoint-tooltip",),
+            )
+            self.canvas.tag_lower(background, label)
+
+    def _show_region(self, region: MapRegion, x: float, y: float) -> None:
+        self.canvas.delete("waypoint-tooltip")
+        text = region.title + (f"\n{region.detail}" if region.detail else "")
+        label = self.canvas.create_text(
+            x + 10,
+            y - 10,
+            text=text,
+            anchor="sw",
+            justify="left",
+            fill="#ffffff",
+            font=("Segoe UI Semibold", 9),
+            tags=("waypoint-tooltip",),
+        )
+        bounds = self.canvas.bbox(label)
+        if bounds is not None:
+            background = self.canvas.create_rectangle(
+                bounds[0] - 6,
+                bounds[1] - 4,
+                bounds[2] + 6,
+                bounds[3] + 4,
+                fill="#20251f",
+                outline=region.color,
+                tags=("waypoint-tooltip",),
+            )
+            self.canvas.tag_lower(background, label)
+
+    def _hide_waypoint(self) -> None:
+        self.canvas.delete("waypoint-tooltip")
 
     def show(self) -> None:
         self.window.deiconify()
@@ -228,20 +411,52 @@ class CoordinateMapWindow:
             image.close()
         self.window.destroy()
 
-    def update(self, position: MapPosition) -> None:
+    def update(
+        self, position: MapPosition, overlays: tuple[MapOverlay, ...] = ()
+    ) -> None:
         previous = self.position
-        self.position = tracked_map_position(previous, position)
-        self._indoor_map_id = None if position.is_world else position.map_id
-        if not self.compact and position.is_world:
-            map_key = "underworld" if position.area == "Underworld" else "world"
-            if previous is None or previous.area != position.area:
-                self.mode.set(map_key)
+        matching = map_layer_for_position(self.document, position)
+        self.position = position if matching is not None else tracked_map_position(previous, position)
+        self._overlay_waypoints = {
+            overlay.layer_key: overlay.waypoints for overlay in overlays
+        }
+        self._indoor_map_id = None if position.is_world or matching is not None else position.map_id
+        if matching is not None and (
+            previous is None
+            or previous.area != position.area
+            or previous.map_id != position.map_id
+        ):
+            self.mode.set(matching.key)
+        if matching is not None:
+            append_map_path(
+                self._hero_paths.setdefault(matching.key, []),
+                map_source_point(position, matching),
+            )
         self._redraw()
 
     def _map_key(self) -> str:
         if not self.compact:
             return self.mode.get()
-        return "underworld" if self.position and self.position.area == "Underworld" else "world"
+        if self.position is not None:
+            layer = map_layer_for_position(self.document, self.position)
+            matching = layer.key if layer is not None else None
+            if matching is not None:
+                return matching
+        return self.document.layers[0].key
+
+    def _image(self, map_key: str) -> Image.Image:
+        image = self._images.get(map_key)
+        if image is None:
+            layer = self.layers[map_key]
+            image_path = layer.image_loader() if layer.image_loader is not None else layer.image_path
+            image = Image.open(image_path).convert("RGB")
+            self._images[map_key] = image
+        return image
+
+    def _open_source(self) -> None:
+        source_url = self.layers[self._map_key()].source_url
+        if source_url:
+            webbrowser.open(source_url)
 
     def _change_zoom(self, delta: int) -> None:
         index = max(
@@ -275,7 +490,7 @@ class CoordinateMapWindow:
         if self.zoom == 1:
             return
         map_key = self._map_key()
-        source = self._images[map_key]
+        source = self._image(map_key)
         canvas_width = max(self.canvas.winfo_width(), 1)
         canvas_height = max(self.canvas.winfo_height(), 1)
         crop_width = source.width / self.zoom
@@ -313,8 +528,9 @@ class CoordinateMapWindow:
             return
 
         map_key = self._map_key()
-        source = self._images[map_key]
-        source_x, source_y = map_source_point(self.position, map_key)
+        layer = self.layers[map_key]
+        source = self._image(map_key)
+        source_x, source_y = map_source_point(self.position, layer)
         if self.compact:
             crop_size = 18 * 16
             shifted = ImageChops.offset(
@@ -376,12 +592,94 @@ class CoordinateMapWindow:
                 ) * scale
         self._photo = ImageTk.PhotoImage(rendered)
         self.canvas.create_image(image_x, image_y, image=self._photo, anchor="nw")
-        matching_area = (
-            self.position.area == "World" and map_key == "world"
-        ) or (
-            self.position.area == "Underworld" and map_key == "underworld"
-        )
-        if self.compact or matching_area:
+        path_visibility = self.waypoint_visibility.get("path")
+        if not self.compact and path_visibility is not None and path_visibility.get():
+            path = self._hero_paths.get(layer.key, ())
+            projected_path = []
+            for path_x, path_y in path:
+                if self.zoom == 1:
+                    projected_path.append((image_x + path_x * scale, image_y + path_y * scale))
+                else:
+                    projected_path.append(
+                        (
+                            width / 2 + wrapped_map_delta(path_x, center_x, source.width) * scale,
+                            height / 2 + wrapped_map_delta(path_y, center_y, source.height) * scale,
+                        )
+                    )
+            for start, end in zip(projected_path, projected_path[1:]):
+                if abs(start[0] - end[0]) > width / 2 or abs(start[1] - end[1]) > height / 2:
+                    continue
+                if not (
+                    -8 <= start[0] <= width + 8
+                    and -8 <= start[1] <= height + 8
+                    and -8 <= end[0] <= width + 8
+                    and -8 <= end[1] <= height + 8
+                ):
+                    continue
+                self.canvas.create_line(
+                    *start,
+                    *end,
+                    fill="#2f8f83",
+                    width=2,
+                    tags=("hero-path",),
+                )
+        if not self.compact:
+            for index, region in enumerate(layer.regions):
+                visibility = self.waypoint_visibility.get(region.kind)
+                if visibility is not None and not visibility.get():
+                    continue
+                source_left = (region.x + layer.offset_x) * layer.tile_width
+                source_top = (region.y + layer.offset_y) * layer.tile_height
+                if self.zoom == 1:
+                    left = image_x + source_left * scale
+                    top = image_y + source_top * scale
+                else:
+                    left = width / 2 + wrapped_map_delta(source_left, center_x, source.width) * scale
+                    top = height / 2 + wrapped_map_delta(source_top, center_y, source.height) * scale
+                right = left + region.width * layer.tile_width * scale
+                bottom = top + region.height * layer.tile_height * scale
+                if right < 0 or bottom < 0 or left > width or top > height:
+                    continue
+                tag = f"region-{index}"
+                if region.kind == "encounters":
+                    region_x = (left + right) / 2
+                    region_y = (top + bottom) / 2
+                    radius = 4
+                    self.canvas.create_oval(
+                        region_x - radius,
+                        region_y - radius,
+                        region_x + radius,
+                        region_y + radius,
+                        fill=OverlayWindow.FOREGROUND,
+                        outline=region.color,
+                        width=2,
+                        tags=(tag, "region"),
+                    )
+                    tooltip_x, tooltip_y = region_x, region_y
+                else:
+                    self.canvas.create_rectangle(
+                        left,
+                        top,
+                        right,
+                        bottom,
+                        fill=region.color,
+                        stipple="gray50",
+                        outline=region.color,
+                        width=1,
+                        tags=(tag, "region"),
+                    )
+                    tooltip_x, tooltip_y = left, top
+                self.canvas.tag_bind(
+                    tag,
+                    "<Enter>",
+                    lambda _event, item=region, x=tooltip_x, y=tooltip_y: self._show_region(item, x, y),
+                )
+                self.canvas.tag_bind(tag, "<Leave>", lambda _event: self._hide_waypoint())
+        matching_area = self.position.area == layer.area
+        player_visibility = self.waypoint_visibility.get("player")
+        if (self.compact or matching_area) and (
+            player_visibility is None or player_visibility.get()
+        ):
             radius = 6 if self.compact else 7
             self.canvas.create_oval(
                 marker_x - radius,
@@ -392,7 +690,56 @@ class CoordinateMapWindow:
                 outline="#20251f",
                 width=2,
             )
-        map_name = self.MAPS[map_key][0]
+        waypoints = layer.waypoints + self._overlay_waypoints.get(layer.key, ())
+        for index, waypoint in enumerate(waypoints):
+            visibility = self.waypoint_visibility.get(waypoint.kind)
+            if visibility is not None and not visibility.get():
+                continue
+            if waypoint.completed and self.hide_completed_waypoints.get():
+                continue
+            waypoint_x, waypoint_y = waypoint_source_point(waypoint, layer)
+            if self.compact:
+                point_x = width / 2 + wrapped_map_delta(
+                    waypoint_x, source_x, source.width
+                ) * side / crop_size
+                point_y = height / 2 + wrapped_map_delta(
+                    waypoint_y, source_y, source.height
+                ) * side / crop_size
+            elif self.zoom == 1:
+                point_x = image_x + waypoint_x * scale
+                point_y = image_y + waypoint_y * scale
+            else:
+                point_x = width / 2 + wrapped_map_delta(
+                    waypoint_x, center_x, source.width
+                ) * scale
+                point_y = height / 2 + wrapped_map_delta(
+                    waypoint_y, center_y, source.height
+                ) * scale
+            if not 0 <= point_x <= width or not 0 <= point_y <= height:
+                continue
+            tag = f"waypoint-{index}"
+            waypoint_color = {
+                "collectibles": "#16817a",
+                "npcs": "#3d6da8",
+            }.get(waypoint.kind, "#bb3e2f")
+            self.canvas.create_oval(
+                point_x - 4,
+                point_y - 4,
+                point_x + 4,
+                point_y + 4,
+                fill=waypoint_color,
+                outline="#ffffff",
+                width=1,
+                tags=(tag, "waypoint"),
+            )
+            self.canvas.tag_bind(
+                tag,
+                "<Enter>",
+                lambda _event, item=waypoint, x=point_x, y=point_y: self._show_waypoint(item, x, y),
+            )
+            self.canvas.tag_bind(tag, "<Leave>", lambda _event: self._hide_waypoint())
+        self.credit.configure(text=layer.credit)
+        map_name = layer.title
         location_note = " · indoors · last outside" if self._indoor_map_id is not None else ""
         self.heading.configure(
             text=f"{map_name} · ({self.position.x},{self.position.y}){location_note}"
@@ -409,12 +756,17 @@ class OverlayWindow:
     DIVIDER = "#cbc8bd"
 
     def __init__(
-        self, client: RetroArchClient, registry: AdapterRegistry, opacity: float = 0.72
+        self,
+        client: RetroArchClient,
+        registry: AdapterRegistry,
+        opacity: float = 0.72,
+        local_settings: LocalPluginSettings | None = None,
     ):
         if not 0.3 <= opacity <= 1.0:
             raise ValueError("Opacity must be between 0.3 and 1.0")
         self.client = client
         self.registry = registry
+        self._local_settings = local_settings
         self._idle_opacity = opacity
         self.root = tk.Tk()
         self.root.overrideredirect(True)
@@ -437,9 +789,15 @@ class OverlayWindow:
         self._section_labels: list[tk.Label] = []
         self._row_labels: list[tk.Label] = []
         self._map_position: MapPosition | None = None
+        self._map_document: MapDocument | None = None
+        self._map_overlays: tuple[MapOverlay, ...] = ()
         self._map_window: CoordinateMapWindow | None = None
         self._minimap_window: CoordinateMapWindow | None = None
-        self._detail_windows: dict[tuple[str, str], tk.Toplevel] = {}
+        self._detail_windows: dict[
+            tuple[str, str, str], tuple[tk.Toplevel, tk.Frame, tuple[PanelRow, ...]]
+        ] = {}
+        self._detail_position_jobs: dict[tuple[str, str, str], str] = {}
+        self._snapshot_cadence = SnapshotCadence()
 
         self._title_font = tkfont.Font(family="Georgia", size=18, weight="bold")
         self._section_font = tkfont.Font(family="Segoe UI Semibold", size=10)
@@ -499,7 +857,7 @@ class OverlayWindow:
             font=self._section_font,
         ).pack(side="left", padx=(0, 10))
         for text, command in (
-            ("WORLD MAP", self._show_map),
+            ("MAP", self._show_map),
             ("MINIMAP", self._show_minimap),
         ):
             tk.Button(
@@ -553,25 +911,29 @@ class OverlayWindow:
     def close(self) -> None:
         self._stop.set()
         self._destroy_map_windows()
-        for window in self._detail_windows.values():
+        for key, (window, _, _) in self._detail_windows.items():
+            self._save_detail_window_position(key, window)
             window.destroy()
         self._detail_windows.clear()
+        self._detail_position_jobs.clear()
         self.root.destroy()
 
     def _show_map(self) -> None:
-        if self._map_position is None:
+        if self._map_position is None or self._map_document is None:
             return
         if self._map_window is None:
-            self._map_window = CoordinateMapWindow(self.root)
-        self._map_window.update(self._map_position)
+            self._map_window = CoordinateMapWindow(self.root, self._map_document)
+        self._map_window.update(self._map_position, self._map_overlays)
         self._map_window.toggle()
 
     def _show_minimap(self) -> None:
-        if self._map_position is None:
+        if self._map_position is None or self._map_document is None:
             return
         if self._minimap_window is None:
-            self._minimap_window = CoordinateMapWindow(self.root, compact=True)
-        self._minimap_window.update(self._map_position)
+            self._minimap_window = CoordinateMapWindow(
+                self.root, self._map_document, compact=True
+            )
+        self._minimap_window.update(self._map_position, self._map_overlays)
         self._minimap_window.toggle()
 
     def _destroy_map_windows(self) -> None:
@@ -582,21 +944,41 @@ class OverlayWindow:
         self._minimap_window = None
 
     def _show_detail(self, action: PanelAction) -> None:
-        key = (action.label, action.title)
+        game = self._last_result.game if isinstance(self._last_result, OverlaySnapshot) else ""
+        key = (game, action.label, action.title)
         existing = self._detail_windows.get(key)
         if existing is not None:
-            if existing.state() == "withdrawn":
-                existing.deiconify()
-                existing.lift()
+            window, _, _ = existing
+            if window.state() == "withdrawn":
+                window.deiconify()
+                window.lift()
             else:
-                existing.withdraw()
+                window.withdraw()
             return
         window = tk.Toplevel(self.root)
-        self._detail_windows[key] = window
         window.title(action.title)
         window.attributes("-topmost", True)
         window.configure(background=self.BACKGROUND)
-        window.geometry("420x520")
+        poc_layout = action.title == "Professor Oak Challenge"
+        if poc_layout:
+            detail_width = self.WIDTH
+            detail_height = 180
+        else:
+            detail_width = min(720, max(520, int(window.winfo_screenwidth() * 0.38)))
+            detail_height = min(720, max(560, int(window.winfo_screenheight() * 0.72)))
+        position = self._detail_window_position(key)
+        placement = (
+            f"{position[0]:+d}{position[1]:+d}" if position is not None else ""
+        )
+        window.geometry(f"{detail_width}x{detail_height}{placement}")
+        window.bind(
+            "<Configure>",
+            lambda event, key=key, window=window: self._schedule_detail_position_save(
+                key, window
+            )
+            if event.widget is window
+            else None,
+        )
         window.protocol("WM_DELETE_WINDOW", window.withdraw)
         header = tk.Frame(window, background=self.FOREGROUND, padx=14, pady=10)
         header.pack(fill="x")
@@ -608,7 +990,7 @@ class OverlayWindow:
             font=self._section_font,
             anchor="w",
             justify="left",
-            wraplength=380,
+            wraplength=detail_width - 52,
         ).pack(side="left", fill="x", expand=True)
         tk.Button(
             header,
@@ -626,14 +1008,43 @@ class OverlayWindow:
         canvas = tk.Canvas(window, background=self.BACKGROUND, highlightthickness=0)
         scrollbar = tk.Scrollbar(window, orient="vertical", command=canvas.yview)
         body = tk.Frame(canvas, background=self.BACKGROUND)
-        body.bind("<Configure>", lambda _: canvas.configure(scrollregion=canvas.bbox("all")))
+        setattr(body, "detail_wraplength", detail_width - 72)
+        if poc_layout:
+            setattr(body, "detail_autosize", (window, header, scrollbar))
+        self._detail_windows[key] = (window, body, action.rows)
+        body.bind(
+            "<Configure>",
+            lambda _: self._sync_detail_scrollbar(canvas, scrollbar),
+        )
         canvas_window = canvas.create_window((0, 0), window=body, anchor="nw")
         canvas.bind("<Configure>", lambda event: canvas.itemconfigure(canvas_window, width=event.width))
         canvas.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side="right", fill="y")
         canvas.pack(side="left", fill="both", expand=True)
-        for row in action.rows:
-            row_frame = tk.Frame(body, background=self.BACKGROUND, padx=14, pady=3)
+        self._render_detail_rows(body, action.rows)
+
+    @staticmethod
+    def _sync_detail_scrollbar(canvas: tk.Canvas, scrollbar: tk.Scrollbar) -> None:
+        canvas.configure(scrollregion=canvas.bbox("all"))
+        first, last = canvas.yview()
+        if first <= 0 and last >= 1:
+            scrollbar.pack_forget()
+        elif not scrollbar.winfo_manager():
+            scrollbar.pack(side="right", fill="y")
+
+    def _render_detail_rows(
+        self, body: tk.Frame, rows: tuple[PanelRow, ...]
+    ) -> None:
+        for child in body.winfo_children():
+            child.destroy()
+        for row in rows:
+            heading = row.caught is None and row.text.isupper()
+            row_frame = tk.Frame(
+                body,
+                background=self.BACKGROUND,
+                padx=14,
+                pady=(8 if heading else 2),
+            )
             row_frame.pack(fill="x")
             indicator = "●" if row.caught else "○" if row.caught is False else ""
             indicator_color = "#27824a" if row.caught else self.MUTED
@@ -650,26 +1061,102 @@ class OverlayWindow:
                 row_frame,
                 text=row.text,
                 background=self.BACKGROUND,
-                foreground=self.FOREGROUND,
-                font=self._body_font,
+                foreground=self.ACCENT if heading else self.FOREGROUND,
+                font=self._section_font if heading else self._body_font,
                 anchor="w",
                 justify="left",
-                wraplength=360,
+                wraplength=getattr(body, "detail_wraplength", 440),
             ).pack(side="left", fill="x", expand=True)
+        autosize = getattr(body, "detail_autosize", None)
+        if autosize is not None:
+            window, header, scrollbar = autosize
+            window.update_idletasks()
+            desired_height = header.winfo_reqheight() + body.winfo_reqheight()
+            maximum_height = window.winfo_screenheight() - 2 * self.SCREEN_MARGIN
+            window.geometry(f"{self.WIDTH}x{min(desired_height, maximum_height)}")
+            window.update_idletasks()
+            self._sync_detail_scrollbar(body.master, scrollbar)
+
+    @staticmethod
+    def _detail_position_key(key: tuple[str, str, str]) -> str:
+        return "|".join(key)
+
+    def _detail_window_position(
+        self, key: tuple[str, str, str]
+    ) -> tuple[int, int] | None:
+        local_settings = getattr(self, "_local_settings", None)
+        if local_settings is None:
+            return None
+        return local_settings.detail_window_position(
+            self._detail_position_key(key)
+        )
+
+    def _schedule_detail_position_save(
+        self, key: tuple[str, str, str], window: tk.Toplevel
+    ) -> None:
+        previous = self._detail_position_jobs.pop(key, None)
+        if previous is not None:
+            self.root.after_cancel(previous)
+        self._detail_position_jobs[key] = self.root.after(
+            250, lambda: self._save_detail_window_position(key, window)
+        )
+
+    def _save_detail_window_position(
+        self, key: tuple[str, str, str], window: tk.Toplevel
+    ) -> None:
+        pending = getattr(self, "_detail_position_jobs", {}).pop(key, None)
+        if pending is not None:
+            self.root.after_cancel(pending)
+        local_settings = getattr(self, "_local_settings", None)
+        if local_settings is not None:
+            local_settings.save_detail_window_position(
+                self._detail_position_key(key), window.winfo_x(), window.winfo_y()
+            )
+
+    def _sync_detail_windows(self, result: OverlaySnapshot | Exception | str) -> None:
+        if not isinstance(result, OverlaySnapshot):
+            for key, (window, _, _) in self._detail_windows.items():
+                self._save_detail_window_position(key, window)
+                window.destroy()
+            self._detail_windows.clear()
+            return
+        actions = {
+            (action.label, action.title): action
+            for section in result.sections
+            for action in section.actions
+        }
+        for key, (window, body, current_rows) in tuple(self._detail_windows.items()):
+            game, label, title = key
+            if game != result.game:
+                self._save_detail_window_position(key, window)
+                window.destroy()
+                self._detail_windows.pop(key)
+                continue
+            action = actions.get((label, title))
+            if action is not None and action.rows != current_rows:
+                self._render_detail_rows(body, action.rows)
+                self._detail_windows[key] = (window, body, action.rows)
 
     def _sync_map_tools(self, result: OverlaySnapshot | Exception | str) -> None:
         position = result.map_position if isinstance(result, OverlaySnapshot) else None
-        if position is None:
+        document = result.map_document if isinstance(result, OverlaySnapshot) else None
+        if position is None or document is None:
             self._map_position = None
+            self._map_document = None
+            self._map_overlays = ()
             self.map_controls.pack_forget()
             self._destroy_map_windows()
             return
+        if document != self._map_document:
+            self._destroy_map_windows()
+        self._map_document = document
         self._map_position = position
+        self._map_overlays = result.map_overlays
         if not self._collapsed and not self.map_controls.winfo_manager():
             self.map_controls.pack(fill="x", before=self.scrollbar)
         for window in (self._map_window, self._minimap_window):
             if window is not None:
-                window.update(position)
+                window.update(position, self._map_overlays)
 
     def _sync_caught_filter(self, result: OverlaySnapshot | Exception | str) -> None:
         supported = isinstance(result, OverlaySnapshot) and result.supports_caught_filter
@@ -706,7 +1193,7 @@ class OverlayWindow:
             self._set_geometry(self.header.winfo_reqheight())
         else:
             self.status_bar.pack(fill="x")
-            if self._map_position is not None:
+            if self._map_position is not None and self._map_document is not None:
                 self.map_controls.pack(fill="x")
             self.scrollbar.pack(side="right", fill="y")
             self.canvas.pack(side="left", fill="both", expand=True)
@@ -733,8 +1220,9 @@ class OverlayWindow:
             try:
                 status = self.client.get_status()
                 if status.state not in {"PLAYING", "PAUSED"}:
+                    self._snapshot_cadence.should_snapshot(status, time.monotonic())
                     self._results.put(f"RetroArch is {status.state.lower()}")
-                else:
+                elif self._snapshot_cadence.should_snapshot(status, time.monotonic()):
                     adapter = self.registry.find(status)
                     if adapter is None:
                         self._results.put(f"No adapter for {status.core}: {status.content}")
@@ -742,7 +1230,7 @@ class OverlayWindow:
                         self._results.put(adapter.snapshot(self.client))
             except (GameUnavailableError, OSError, RetroArchError, ValueError) as error:
                 self._results.put(error)
-            self._stop.wait(0.5)
+            self._stop.wait(0.1)
 
     def _drain_results(self) -> None:
         latest: OverlaySnapshot | Exception | str | None = None
@@ -761,6 +1249,7 @@ class OverlayWindow:
             return
         self._sync_caught_filter(result)
         self._sync_map_tools(result)
+        self._sync_detail_windows(result)
         section_views = self._section_views(result) if isinstance(result, OverlaySnapshot) else ()
         layout = self._layout_signature(section_views)
         if isinstance(result, OverlaySnapshot) and layout == self._rendered_layout:

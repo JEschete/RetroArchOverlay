@@ -12,7 +12,8 @@ Implemented in the first slice:
 - RA HTTP/config implementation under `infrastructure`
 - an initial internal sibling-folder discovery prototype with isolated failures; this must be replaced by external repository discovery
 - external `plugin.toml` repository discovery with strict validation and isolated lazy loading
-- Pokemon Emerald extracted to `JEschete/RAO_pokeemerald` with `pret/pokeemerald` pinned under `vendor/pokeemerald`
+- Pokemon Emerald extracted to `JEschete/RAO_pokeemerald` with `pret/pokeemerald` pinned under `decomp_reference/pokeemerald`
+- shared CLI and Tk manager for creating and updating uniform `RAO_<game>` plugin repositories
 - Emerald code, tests, and game-specific resources removed from the core repository
 - architecture tests for the first game/core import rules
 - hash-driven, public-Web-API achievement research export with offline saved-page memory-note import
@@ -37,7 +38,7 @@ All source-controlled game knowledge must live in that plugin repository. This i
 4. Load each plugin's lightweight `plugin.py` in an isolated module namespace derived from its manifest ID. Construct the adapter lazily only after its manifest matches active content.
 5. The default plugin directory is `<core-repository>/plugins/`. It is ignored by the core repository so each child remains independently versioned. Additional roots may be supplied with repeatable `--plugin-dir` arguments.
 6. Git is the plugin installation and update mechanism. The startup repository manager may clone a user-selected catalog entry with `--recurse-submodules` and update a clean checkout with `pull --ff-only` followed by recursive submodule synchronization. It must never auto-install, force-update, reset, merge, or delete a repository.
-7. A plugin may pin a game decomp under `vendor/` as a Git submodule. `git clone --recurse-submodules` is the standard acquisition path for such plugins.
+7. A plugin may pin a game decomp under `decomp_reference/` as a Git submodule. `git clone --recurse-submodules` is the standard acquisition path for such plugins.
 8. A plugin import must not require its submodules. Submodule/data validation occurs only when matching content causes lazy adapter construction.
 9. Keep all communication between a plugin and the application in shared, immutable data contracts.
 10. Keep Tk, sockets, HTTP, keyring, filesystem search, and command-line parsing out of plugin domain modules.
@@ -59,7 +60,7 @@ flowchart TD
     Discovery --> Manifest[plugin repo: plugin.toml]
     Discovery --> Plugin[plugin repo: plugin.py]
     Plugin --> Game[plugin repository internals]
-    Game --> Vendor[optional vendor/decomp submodules]
+    Game --> Decomp[optional decomp reference submodules]
     Game --> Core
     Game --> ServiceContracts[service protocols]
     Infra --> Core
@@ -195,11 +196,11 @@ Each standalone plugin repository owns one game's complete behavior and source-c
 Every plugin repository follows this shape:
 
 ```text
-RetroArchOverlay-<Game>/
+RAO_<game>/
     .git/
     .gitignore
     .gitmodules                         # only when the plugin uses submodules
-    LICENSE.md
+    LICENSE
     README.md
     plugin.toml                         # parsed without executing Python
     plugin.py                           # lightweight adapter factory
@@ -219,7 +220,7 @@ RetroArchOverlay-<Game>/
         test_memory.py
         test_presenter.py
         fixtures/
-    vendor/
+    decomp_reference/
         <optional-decomp-submodule>/
 ```
 
@@ -237,7 +238,7 @@ Only `plugin.toml`, `plugin.py`, `game/`, and `tests/test_plugin.py` are structu
 - `game/data/`: larger authored JSON or binary tables.
 - `game/assets/`: maps, patches, images, and source/license metadata.
 - `tests/fixtures/`: compact memory and external-data fixtures.
-- `vendor/`: Git submodules for decomps or other upstream source trees.
+- `decomp_reference/`: Git submodules for decomps or other upstream source trees.
 
 ### Internal Dependency Direction
 
@@ -264,6 +265,7 @@ slug = "pokeemerald"
 name = "Pokemon Emerald"
 api_version = 1
 entry = "plugin.py"
+license = "MIT"
 ra_game_id = 668
 
 [match]
@@ -274,8 +276,10 @@ hashes = ["31446456df04356cb9f2145bada42ed2"]
 [[sources]]
 id = "pokeemerald"
 kind = "git-submodule"
-path = "vendor/pokeemerald"
+path = "decomp_reference/pokeemerald"
 required = true
+url = "https://github.com/pret/pokeemerald.git"
+revision = "5eff78649e7170a877b961ef0b3da13b81a16038"
 required_files = [
     "src/data/wild_encounters.json",
     "data/maps/map_groups.json",
@@ -508,13 +512,13 @@ Specific moves:
 - All RA game IDs out of `main.py` and into manifests.
 - Game-specific examples in shared protocol tests replaced with neutral example names.
 
-The loader supplies an absolute, validated `repository_root` in `GameContext`. Plugins resolve `game/data`, `game/assets`, and `vendor` paths from that root. Paths declared in manifests are normalized and rejected if they escape the repository root.
+The loader supplies an absolute, validated `repository_root` in `GameContext`. Plugins resolve `game/data`, `game/assets`, and `decomp_reference` paths from that root. Paths declared in manifests are normalized and rejected if they escape the repository root.
 
 No plugin asset is copied into the core repository or a Python installation. Git tracks assets in the plugin repository, and normal filesystem reads load them in place. Each plugin owns attribution and license documentation for its assets and vendored sources.
 
 ## External Data Policy
 
-Decomps and similar upstream source trees belong to the plugin that consumes them. When a game has a suitable decomp, the plugin repository pins it as a Git submodule under `vendor/`.
+Decomps and similar upstream source trees belong to the plugin that consumes them. When a game has a suitable decomp, the plugin repository pins it as a Git submodule under `decomp_reference/`.
 
 Emerald's expected repository layout is:
 
@@ -525,15 +529,15 @@ RAO_pokeemerald/
     plugin.py
     game/
     tests/
-    vendor/
+    decomp_reference/
         pokeemerald/                  # pinned Git submodule
 ```
 
 Its `.gitmodules` entry is equivalent to:
 
 ```ini
-[submodule "vendor/pokeemerald"]
-    path = vendor/pokeemerald
+[submodule "decomp_reference/pokeemerald"]
+    path = decomp_reference/pokeemerald
     url = https://github.com/pret/pokeemerald.git
 ```
 
@@ -560,7 +564,7 @@ Rules for submodule-backed plugins:
 - Required source validation happens only when that plugin is selected for active content.
 - A missing submodule produces `GameUnavailableError` with the plugin repository path and exact `git -C <repo> submodule update --init --recursive` recovery command.
 - The error appears in application diagnostics; it never terminates the harness or disables other plugins.
-- Plugins may accept an explicit external decomp-path override, but their own pinned `vendor/<decomp>` is the default and tested source.
+- Plugins may accept an explicit external decomp-path override, but their own pinned `decomp_reference/<decomp>` is the default and tested source.
 - Normal discovery, matching, activation, and overlay runtime never modify a plugin or its submodules. The startup repository manager may initialize or synchronize pinned submodules only during an explicit user-selected install or eligible fast-forward update.
 - Recursive submodules are supported by the documented Git command.
 
@@ -754,7 +758,7 @@ Exit criteria:
 
 1. Create the independent `RAO_pokeemerald` Git plugin repository next to the core checkout.
 2. Add `plugin.toml` and lightweight `plugin.py` without decomp reads at import time.
-3. Add `pret/pokeemerald` at `vendor/pokeemerald` as a pinned Git submodule.
+3. Add `pret/pokeemerald` at `decomp_reference/pokeemerald` as a pinned Git submodule.
 4. Declare generic required source files and the external-path override in `plugin.toml`.
 5. Move identity, hashes, RA metadata, save-block logic, and battle-memory parsing into the plugin repository.
 6. Move decomp file parsing and semantic validation into `game/decomp.py`.
@@ -848,11 +852,11 @@ Exit criteria:
 
 Adding a game means creating an independent Git repository:
 
-1. Create `RetroArchOverlay-<Game>` from the plugin repository template.
+1. Run `rao-plugin create` or use `launch_gui.cmd` to create `RAO_<game>` from the shared template.
 2. Fill in `plugin.toml` and lightweight `plugin.py`.
 3. Implement typed state and memory decoding under `game/`.
 4. Add authored knowledge, assets, tests, and fixtures inside that repository.
-5. When a decomp is needed, add it with `git submodule add <url> vendor/<name>` and commit the resulting gitlink and `.gitmodules` file.
+5. When a decomp is needed, run `rao-plugin update RAO_<game> --decomp-url <url> --decomp-revision <commit> --install-decomp` and commit the resulting gitlink, manifest, and `.gitmodules` file.
 6. Build shared presentation documents in the plugin presenter.
 7. Run plugin-local unit tests and the core contract runner.
 8. Clone the repository into a configured plugin root, using `--recurse-submodules` when applicable.
@@ -866,20 +870,20 @@ Install a plugin through the startup repository manager, or manually:
 
 ```powershell
 git clone --recurse-submodules <plugin-repository-url> `
-    .\plugins\RetroArchOverlay-<Game>
+    .\plugins\RAO_<game>
 ```
 
 Update a plugin and its pinned submodules:
 
 ```powershell
-git -C .\plugins\RetroArchOverlay-<Game> pull --ff-only
-git -C .\plugins\RetroArchOverlay-<Game> submodule update --init --recursive
+git -C .\plugins\RAO_<game> pull --ff-only
+git -C .\plugins\RAO_<game> submodule update --init --recursive
 ```
 
 Remove a plugin:
 
 ```powershell
-Remove-Item -Recurse .\plugins\RetroArchOverlay-<Game>
+Remove-Item -Recurse .\plugins\RAO_<game>
 ```
 
 The startup repository manager wraps only the safe install and fast-forward update operations described above. Manual Git commands remain supported for recovery and advanced workflows.
@@ -919,15 +923,15 @@ python -m pytest tests/test_architecture.py tests/test_game_discovery.py
 python -m pytest -m "not external_data and not emulator and not network"
 python -m pytest
 python -m compileall -q src
-python .\tools\test_plugin.py .\plugins\RetroArchOverlay-<Game>
+python .\tools\test_plugin.py .\plugins\RAO_<game>
 git diff --check
 ```
 
 For plugins with a decomp submodule:
 
 ```powershell
-git -C .\plugins\RetroArchOverlay-<Game> submodule status --recursive
-python .\tools\test_plugin.py .\plugins\RetroArchOverlay-<Game> --external-data
+git -C .\plugins\RAO_<game> submodule status --recursive
+python .\tools\test_plugin.py .\plugins\RAO_<game> --external-data
 ```
 
 External-data and emulator checks remain separate because they require recursively cloned resources or local emulator/ROM access.
@@ -980,4 +984,4 @@ The next implementation slice should finish Phase 2:
 4. Add blank-harness and missing-submodule diagnostics.
 5. Add `--plugin-dir`, `--list-plugins`, and `--diagnose`.
 
-That slice fixes the current startup failure before files cross repository boundaries. Dragon Warrior III should then become the first external reference plugin because it has no decomp dependency and its fake-memory coverage is already strong. Emerald follows with `vendor/pokeemerald` as its pinned submodule.
+That slice fixes the current startup failure before files cross repository boundaries. Dragon Warrior III should then become the first external reference plugin because it has no decomp dependency and its fake-memory coverage is already strong. Emerald follows with `decomp_reference/pokeemerald` as its pinned submodule.

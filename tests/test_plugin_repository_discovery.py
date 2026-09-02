@@ -29,6 +29,7 @@ slug = "{resolved_slug}"
 name = "{name}"
 api_version = 1
 entry = "{entry}"
+license = "MIT"
 
 [match]
 cores = ["test_core"]
@@ -54,6 +55,28 @@ class PluginManifestTests(unittest.TestCase):
         self.assertEqual(manifest.plugin_id, "org.example.alpha")
         self.assertEqual(manifest.content_hashes, frozenset({"abcdef"}))
         self.assertEqual(manifest.entry, Path("plugin.py"))
+        self.assertEqual(manifest.license_expression, "MIT")
+
+    def test_parses_source_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = write_plugin(
+                Path(directory),
+                "alpha",
+                extra='''
+[[sources]]
+id = "decomp"
+kind = "git-submodule"
+path = "decomp_reference/example"
+required = false
+url = "https://example.test/decomp.git"
+revision = "abc123"
+''',
+            )
+
+            source = parse_plugin_manifest(repository).sources[0]
+
+        self.assertEqual(source.url, "https://example.test/decomp.git")
+        self.assertEqual(source.revision, "abc123")
 
     def test_rejects_entry_path_escape(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
