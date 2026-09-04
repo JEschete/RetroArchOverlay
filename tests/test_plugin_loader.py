@@ -111,7 +111,7 @@ class RepositoryAdapterTests(unittest.TestCase):
             with self.assertRaisesRegex(GameUnavailableError, "submodule update"):
                 adapter._load_adapter()
 
-    def test_mismatched_required_source_revision_is_rejected(self) -> None:
+    def test_older_required_source_revision_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             repository_root = write_repository(
@@ -131,11 +131,43 @@ class RepositoryAdapterTests(unittest.TestCase):
             with (
                 patch(
                     "retroarch_overlay.infrastructure.plugin_loader.subprocess.run",
-                    return_value=Mock(returncode=0, stdout="b" * 40 + "\n"),
+                    side_effect=[
+                        Mock(returncode=0, stdout="d" * 40 + "\n"),
+                        Mock(returncode=1),
+                    ],
                 ),
-                self.assertRaisesRegex(GameUnavailableError, "expected"),
+                self.assertRaisesRegex(GameUnavailableError, "expected at least"),
             ):
                 adapter._load_adapter()
+
+    def test_newer_required_source_revision_is_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository_root = write_repository(
+                root,
+                required_source=True,
+                source_revision="a" * 40,
+            )
+            source = repository_root / "decomp_reference" / "data"
+            source.mkdir(parents=True)
+            (source / "required.txt").write_text("data", encoding="utf-8")
+            (source / ".git").write_text("gitdir: elsewhere", encoding="utf-8")
+            repository = discover_plugin_repositories((root,)).repositories[0]
+            adapter = RepositoryAdapter(
+                repository, GameContext(repository_root=repository_root)
+            )
+
+            with patch(
+                "retroarch_overlay.infrastructure.plugin_loader.subprocess.run",
+                side_effect=[
+                    Mock(returncode=0, stdout="c" * 40 + "\n"),
+                    Mock(returncode=0),
+                ],
+            ) as run_mock:
+                adapter._load_adapter()
+
+            first_call = run_mock.call_args_list[0].args[0]
+            self.assertIn("safe.directory=*", first_call)
 
 
 if __name__ == "__main__":

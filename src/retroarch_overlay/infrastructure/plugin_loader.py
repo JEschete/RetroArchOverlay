@@ -101,6 +101,16 @@ def _load_plugin_module(plugin_id: str, repository_root: Path, entry: Path) -> M
     return module
 
 
+def _run_git_check(repo_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ("git", "-c", "safe.directory=*", "-C", str(repo_path), *args),
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+
+
 def _preflight_sources(repository: DiscoveredPluginRepository) -> None:
     root = repository.repository_root
     for source in repository.manifest.sources:
@@ -117,21 +127,34 @@ def _preflight_sources(repository: DiscoveredPluginRepository) -> None:
             )
         if source.revision and (source_root / ".git").exists():
             try:
-                result = subprocess.run(
-                    ("git", "-C", str(source_root), "rev-parse", "HEAD"),
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    check=False,
+                head_result = _run_git_check(source_root, "rev-parse", "HEAD")
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise GameUnavailableError(
+                    f"could not verify required source {source.source_id!r}: {error}"
+                ) from error
+            revision = head_result.stdout.strip().casefold()
+            if head_result.returncode:
+                raise GameUnavailableError(
+                    f"required source {source.source_id!r} is at "
+                    f"{revision or 'an unknown revision'}; expected at least {source.revision}; "
+                    f"run: git -C {root} submodule update --init --recursive"
+                )
+            minimum_revision = source.revision.casefold()
+            try:
+                ancestor_result = _run_git_check(
+                    source_root,
+                    "merge-base",
+                    "--is-ancestor",
+                    minimum_revision,
+                    "HEAD",
                 )
             except (OSError, subprocess.TimeoutExpired) as error:
                 raise GameUnavailableError(
                     f"could not verify required source {source.source_id!r}: {error}"
                 ) from error
-            revision = result.stdout.strip().casefold()
-            if result.returncode or revision != source.revision.casefold():
+            if ancestor_result.returncode != 0:
                 raise GameUnavailableError(
                     f"required source {source.source_id!r} is at "
-                    f"{revision or 'an unknown revision'}; expected {source.revision}; "
+                    f"{revision}; expected at least {source.revision}; "
                     f"run: git -C {root} submodule update --init --recursive"
                 )
