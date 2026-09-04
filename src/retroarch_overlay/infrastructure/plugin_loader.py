@@ -3,6 +3,7 @@ import importlib.util
 import re
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
 
@@ -20,7 +21,14 @@ class RepositoryAdapter:
     ) -> None:
         self.name = repository.manifest.display_name
         self._repository = repository
-        self._context = context
+        self._context = replace(
+            context,
+            repository_root=(
+                context.repository_root.resolve()
+                if context.repository_root is not None
+                else None
+            ),
+        )
         self._adapter: GameAdapter | None = None
 
     def supports(

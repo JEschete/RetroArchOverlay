@@ -87,7 +87,10 @@ class RepositoryAdapterTests(unittest.TestCase):
             repository_root = write_repository(root)
             repository = discover_plugin_repositories((root,)).repositories[0]
             adapter = RepositoryAdapter(
-                repository, GameContext(repository_root=repository_root)
+                repository,
+                GameContext(
+                    repository_root=repository_root / ".." / repository_root.name
+                ),
             )
 
             first = adapter._load_adapter()
