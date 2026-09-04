@@ -4,6 +4,7 @@ import sys
 import threading
 import time
 import traceback
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Callable
@@ -123,7 +124,8 @@ class UIHangWatchdog:
         self._rotate_report()
         report = (
             f"\n{'=' * 80}\n"
-            f"UI HANG DETECTED pid={os.getpid()} stalled={elapsed:.3f}s\n"
+            f"UI HANG DETECTED at={datetime.now().astimezone().isoformat()} "
+            f"pid={os.getpid()} stalled={elapsed:.3f}s\n"
             f"context={context}\n"
             f"{'=' * 80}\n"
             f"{self._thread_dump()}\n"

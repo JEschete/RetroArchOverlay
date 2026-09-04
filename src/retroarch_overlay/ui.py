@@ -414,6 +414,7 @@ class CoordinateMapWindow:
             justify="left",
             fill="#ffffff",
             font=("Segoe UI Semibold", 9),
+            state="disabled",
             tags=("waypoint-tooltip",),
         )
         bounds = self.canvas.bbox(label)
@@ -425,6 +426,7 @@ class CoordinateMapWindow:
                 bounds[3] + 4,
                 fill="#20251f",
                 outline="#f8c24e",
+                state="disabled",
                 tags=("waypoint-tooltip",),
             )
             self.canvas.tag_lower(background, label)
@@ -440,6 +442,7 @@ class CoordinateMapWindow:
             justify="left",
             fill="#ffffff",
             font=("Segoe UI Semibold", 9),
+            state="disabled",
             tags=("waypoint-tooltip",),
         )
         bounds = self.canvas.bbox(label)
@@ -451,6 +454,7 @@ class CoordinateMapWindow:
                 bounds[3] + 4,
                 fill="#20251f",
                 outline=region.color,
+                state="disabled",
                 tags=("waypoint-tooltip",),
             )
             self.canvas.tag_lower(background, label)
@@ -459,6 +463,12 @@ class CoordinateMapWindow:
         self.canvas.delete("waypoint-tooltip")
 
     def show(self) -> None:
+        LOGGER.info(
+            "Map window show compact=%s zoom=%s position=%s",
+            self.compact,
+            self.zoom,
+            self.position,
+        )
         self.window.deiconify()
         self.window.lift()
         self._redraw()
@@ -470,10 +480,17 @@ class CoordinateMapWindow:
             self.hide()
 
     def hide(self) -> None:
+        LOGGER.info("Map window hide compact=%s", self.compact)
         self._cancel_redraw()
         self.window.withdraw()
 
     def destroy(self) -> None:
+        LOGGER.info(
+            "Map window destroy compact=%s source_cache=%d fit_cache=%d",
+            self.compact,
+            len(self._images),
+            len(self._fit_images),
+        )
         self._destroyed = True
         self._cancel_redraw()
         self._photo = None
@@ -827,18 +844,19 @@ class CoordinateMapWindow:
             self._photo = ImageTk.PhotoImage(rendered)
             self._photo_key = photo_key
         self.canvas.create_image(image_x, image_y, image=self._photo, anchor="nw")
-        self._set_hang_context("full-redraw-hero-path")
-        self._draw_hero_path(
-            layer,
-            source,
-            width,
-            height,
-            image_x,
-            image_y,
-            scale,
-            center_x if self.zoom > 1 else None,
-            center_y if self.zoom > 1 else None,
-        )
+        if not self.compact:
+            self._set_hang_context("full-redraw-hero-path")
+            self._draw_hero_path(
+                layer,
+                source,
+                width,
+                height,
+                image_x,
+                image_y,
+                scale,
+                center_x if self.zoom > 1 else None,
+                center_y if self.zoom > 1 else None,
+            )
         if not self.compact:
             self._set_hang_context(
                 f"full-redraw-regions count={len(layer.regions)}"
@@ -861,20 +879,15 @@ class CoordinateMapWindow:
                     continue
                 tag = f"region-{index}"
                 if region.kind == "encounters":
-                    region_x = (left + right) / 2
-                    region_y = (top + bottom) / 2
-                    radius = 4
-                    self.canvas.create_oval(
-                        region_x - radius,
-                        region_y - radius,
-                        region_x + radius,
-                        region_y + radius,
-                        fill=OverlayWindow.FOREGROUND,
-                        outline=region.color,
-                        width=2,
-                        tags=(tag, "region"),
+                    self._create_encounter_region(
+                        region,
+                        left,
+                        top,
+                        right,
+                        bottom,
+                        tag,
                     )
-                    tooltip_x, tooltip_y = region_x, region_y
+                    tooltip_x, tooltip_y = left, top
                 else:
                     self.canvas.create_rectangle(
                         left,
@@ -954,6 +967,51 @@ class CoordinateMapWindow:
         self.heading.configure(
             text=f"{map_name} · ({self.position.x},{self.position.y}){location_note}"
         )
+
+    def _create_encounter_region(
+        self,
+        region: MapRegion,
+        left: float,
+        top: float,
+        right: float,
+        bottom: float,
+        tag: str,
+    ) -> None:
+        self.canvas.create_rectangle(
+            left,
+            top,
+            right,
+            bottom,
+            fill=region.color,
+            stipple="gray12",
+            outline=region.color,
+            width=2,
+            tags=(tag, "region", "encounter-cell"),
+        )
+        cell_size = min(right - left, bottom - top)
+        label = (
+            region.label
+            if cell_size >= 72
+            else region.compact_label or region.label
+        )
+        if not label:
+            return
+        center_x = (left + right) / 2
+        center_y = (top + bottom) / 2
+        wrap_width = max(12, int(right - left) - 6)
+        font_size = 8 if cell_size >= 72 else 6
+        for offset, color in ((1, "#10151a"), (0, "#ffffff")):
+            self.canvas.create_text(
+                center_x + offset,
+                center_y + offset,
+                text=label,
+                width=wrap_width,
+                justify="center",
+                fill=color,
+                font=("Segoe UI Semibold", font_size),
+                state="disabled",
+                tags=(tag, "region-label"),
+            )
 
     def _create_waypoint_marker(
         self,
@@ -1396,6 +1454,10 @@ class OverlayWindow:
         self._rendered_layout: tuple[object, ...] | None = None
         self._section_labels: list[tk.Label] = []
         self._row_labels: list[tk.Label] = []
+        self._row_tooltips: dict[tk.Label, str] = {}
+        self._tooltip_window: tk.Toplevel | None = None
+        self._tooltip_label: tk.Label | None = None
+        self._tooltip_widget: tk.Label | None = None
         self._map_position: MapPosition | None = None
         self._map_document: MapDocument | None = None
         self._map_overlays: tuple[MapOverlay, ...] = ()
@@ -1593,12 +1655,96 @@ class OverlayWindow:
         self._layout_manager.close()
         self._destroy_map_windows()
         self._destroy_secondary_window()
+        self._hide_row_tooltip()
+        if self._tooltip_window is not None:
+            self._tooltip_window.destroy()
+            self._tooltip_window = None
+            self._tooltip_label = None
         for key, (window, _, _) in self._detail_windows.items():
             self._save_detail_window_position(key, window)
             window.destroy()
         self._detail_windows.clear()
         self._detail_position_jobs.clear()
         self.root.destroy()
+
+    def _bind_row_tooltip(self, label: tk.Label, tooltip: str) -> None:
+        self._update_row_tooltip(label, tooltip)
+        label.bind(
+            "<Enter>",
+            lambda _event, widget=label: self._show_row_tooltip(widget),
+        )
+        label.bind("<Leave>", lambda _event: self._hide_row_tooltip())
+        label.bind(
+            "<FocusIn>",
+            lambda _event, widget=label: self._show_row_tooltip(widget),
+        )
+        label.bind("<FocusOut>", lambda _event: self._hide_row_tooltip())
+
+    def _update_row_tooltip(self, label: tk.Label, tooltip: str) -> None:
+        self._row_tooltips[label] = tooltip
+        label.configure(
+            cursor="question_arrow" if tooltip else "",
+            takefocus=bool(tooltip),
+        )
+        if self._tooltip_widget is label:
+            self._show_row_tooltip(label)
+
+    def _show_row_tooltip(
+        self,
+        widget: tk.Label,
+    ) -> None:
+        text = self._row_tooltips.get(widget, "")
+        if not text:
+            self._hide_row_tooltip()
+            return
+        if self._tooltip_window is None:
+            self._tooltip_window = tk.Toplevel(self.root)
+            self._tooltip_window.withdraw()
+            self._tooltip_window.overrideredirect(True)
+            self._tooltip_window.attributes("-topmost", True)
+            self._tooltip_window.configure(background=self.FOREGROUND)
+            self._tooltip_label = tk.Label(
+                self._tooltip_window,
+                background=self.FOREGROUND,
+                foreground="#ffffff",
+                font=self._body_font,
+                justify="left",
+                anchor="w",
+                padx=10,
+                pady=8,
+                wraplength=340,
+            )
+            self._tooltip_label.pack()
+        assert self._tooltip_label is not None
+        self._tooltip_label.configure(text=text)
+        self._tooltip_window.update_idletasks()
+        width = self._tooltip_window.winfo_reqwidth()
+        height = self._tooltip_window.winfo_reqheight()
+        widget_left = widget.winfo_rootx()
+        widget_top = widget.winfo_rooty()
+        widget_right = widget_left + widget.winfo_width()
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        if widget_right + width + 8 <= screen_width:
+            x = widget_right + 8
+            y = widget_top
+        elif widget_left - width - 8 >= 0:
+            x = widget_left - width - 8
+            y = widget_top
+        else:
+            x = max(4, min(widget_left, screen_width - width - 4))
+            below = widget_top + widget.winfo_height() + 8
+            y = below if below + height <= screen_height else widget_top - height - 8
+        y = max(4, min(y, screen_height - height - 4))
+        self._tooltip_window.geometry(f"+{x}+{y}")
+        self._tooltip_window.deiconify()
+        self._tooltip_window.lift()
+        self._tooltip_widget = widget
+
+    def _hide_row_tooltip(self) -> None:
+        if self._tooltip_window is not None:
+            self._tooltip_window.withdraw()
+        self._tooltip_widget = None
 
     def _show_map(self) -> None:
         if self._map_position is None or self._map_document is None:
@@ -2393,11 +2539,14 @@ class OverlayWindow:
             visible_rows = [row for _, rows, _, _ in section_views for row in rows]
             for label, row in zip(self._row_labels, visible_rows):
                 label.configure(text=row.text)
+                self._update_row_tooltip(label, row.tooltip)
             return
         self._last_result = result
         self._rendered_layout = layout if isinstance(result, OverlaySnapshot) else None
         self._section_labels = []
         self._row_labels = []
+        self._row_tooltips = {}
+        self._hide_row_tooltip()
         previous_content = self.content
         self.content = tk.Frame(self.canvas, background=self.BACKGROUND)
         self.content.bind(
@@ -2459,6 +2608,7 @@ class OverlayWindow:
                 )
                 row_label.pack(side="left", fill="x", expand=True)
                 self._row_labels.append(row_label)
+                self._bind_row_tooltip(row_label, row.tooltip)
             for action in section.actions:
                 tk.Button(
                     block,

@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 from retroarch_overlay.core.retroachievements import RAGameReference
 from retroarch_overlay.infrastructure.retroachievements import RAGameTitleMatch
 from retroarch_overlay.manager_gui import PluginManagerWindow
-from retroarch_overlay.models import MapDocument, MapLayer, MapPosition, MapWaypoint, OverlaySnapshot, PanelAction, PanelRow, PanelSection, RetroArchStatus
+from retroarch_overlay.models import MapDocument, MapLayer, MapPosition, MapRegion, MapWaypoint, OverlaySnapshot, PanelAction, PanelRow, PanelSection, RetroArchStatus
 from retroarch_overlay.plugin_catalog import PluginCatalogEntry
 from retroarch_overlay.ra_plugin_metadata import RAGameSelectionRequired
 from retroarch_overlay.retroarch_installation import network_commands_enabled
@@ -32,6 +32,13 @@ from retroarch_overlay.ui import (
 
 
 class SnapshotCadenceTests(unittest.TestCase):
+    def test_panel_rows_support_optional_hover_details(self) -> None:
+        plain = PanelRow("Plain")
+        explained = PanelRow("Blaze", tooltip="Deals fire damage to one enemy.")
+
+        self.assertEqual(plain.tooltip, "")
+        self.assertEqual(explained.tooltip, "Deals fire damage to one enemy.")
+
     def test_snapshots_immediately_on_game_switch_then_four_times_per_second(self) -> None:
         cadence = SnapshotCadence()
         first = RetroArchStatus("PLAYING", "core", "First Game", "11111111")
@@ -351,6 +358,49 @@ class MainPanelInteractionTests(unittest.TestCase):
 
 
 class DetailWindowTests(unittest.TestCase):
+    def test_row_tooltip_metadata_can_refresh_without_rebinding(self) -> None:
+        overlay = OverlayWindow.__new__(OverlayWindow)
+        label = Mock()
+        overlay._row_tooltips = {label: "Old details"}
+        overlay._tooltip_widget = label
+        overlay._show_row_tooltip = Mock()
+        overlay._last_result = None
+        overlay._sync_caught_filter = Mock()
+        overlay._sync_map_tools = Mock()
+        overlay._sync_detail_windows = Mock()
+        row = PanelRow("Blaze", tooltip="New details")
+        section = PanelSection("Battle", (row,))
+        overlay._section_views = Mock(
+            return_value=((section, (row,), 0, ("Game", "Battle")),)
+        )
+        overlay._layout_signature = Mock(return_value=("stable",))
+        overlay._rendered_layout = ("stable",)
+        overlay.game_label = Mock()
+        overlay.location_label = Mock()
+        overlay.status_label = Mock()
+        overlay._controller = Mock()
+        overlay._controller.metrics.snapshot_seconds = 0.01
+        overlay._section_labels = [Mock()]
+        overlay._row_labels = [label]
+
+        overlay._render(OverlaySnapshot("Game", "Battle", (section,)))
+
+        self.assertEqual(overlay._row_tooltips[label], "New details")
+        overlay._show_row_tooltip.assert_called_once_with(label)
+
+    def test_plain_row_can_gain_a_tooltip_on_the_fast_path(self) -> None:
+        overlay = OverlayWindow.__new__(OverlayWindow)
+        label = Mock()
+        overlay._row_tooltips = {}
+        overlay._tooltip_widget = None
+
+        overlay._bind_row_tooltip(label, "")
+        overlay._update_row_tooltip(label, "Live battle details")
+
+        self.assertEqual(overlay._row_tooltips[label], "Live battle details")
+        self.assertEqual(label.bind.call_count, 4)
+        label.configure.assert_called_with(cursor="question_arrow", takefocus=True)
+
     def test_party_detail_rows_have_explicit_visual_roles(self) -> None:
         self.assertEqual(
             party_detail_row_role(
@@ -642,6 +692,46 @@ class MapProjectionTests(unittest.TestCase):
         self.assertEqual(window.position, position)
         window._redraw.assert_not_called()
 
+    def test_compact_map_draw_does_not_use_full_map_projection_scale(self) -> None:
+        window = CoordinateMapWindow.__new__(CoordinateMapWindow)
+        window.canvas = Mock()
+        window.canvas.winfo_width.return_value = 184
+        window.canvas.winfo_height.return_value = 184
+        window._drawn_path_lengths = {}
+        window.position = MapPosition("Outside", 0, 10, 12, True)
+        window._indoor_map_id = None
+        window.compact = True
+        window.zoom = 1
+        window.layers = {self.wrapped_layer.key: self.wrapped_layer}
+        window._map_key = Mock(return_value=self.wrapped_layer.key)
+        source = Mock(width=4096, height=4096)
+        shifted = Mock()
+        crop = Mock()
+        rendered = Mock()
+        shifted.crop.return_value = crop
+        crop.resize.return_value = rendered
+        window._image = Mock(return_value=source)
+        window._set_hang_context = Mock()
+        window._draw_hero_path = Mock()
+        window._photo = None
+        window._photo_key = None
+        window.waypoint_visibility = {"player": Mock()}
+        window.waypoint_visibility["player"].get.return_value = True
+        window._overlay_waypoints = {}
+        window.hide_completed_waypoints = Mock()
+        window.credit = Mock()
+        window.heading = Mock()
+
+        with (
+            patch("retroarch_overlay.ui.ImageChops.offset", return_value=shifted),
+            patch("retroarch_overlay.ui.ImageTk.PhotoImage", return_value=Mock()),
+        ):
+            window._draw()
+
+        window._draw_hero_path.assert_not_called()
+        window.canvas.create_image.assert_called_once()
+        window.canvas.create_oval.assert_called_once()
+
     def test_visible_fit_map_updates_only_dynamic_items_while_walking(self) -> None:
         document = MapDocument("Game", (self.wrapped_layer,))
         window = CoordinateMapWindow.__new__(CoordinateMapWindow)
@@ -672,6 +762,97 @@ class MapProjectionTests(unittest.TestCase):
             window._create_path_run([(float(index), 0.0) for index in range(8)])
 
         self.assertEqual(window.canvas.create_line.call_count, 3)
+
+    def test_region_tooltip_does_not_intercept_hover_events(self) -> None:
+        window = CoordinateMapWindow.__new__(CoordinateMapWindow)
+        window.canvas = Mock()
+        window.canvas.create_text.return_value = 10
+        window.canvas.bbox.return_value = (10, 10, 100, 50)
+        region = MapRegion(0, 0, 16, 16, "Enemies", "Slime", "encounters")
+
+        window._show_region(region, 20, 20)
+
+        self.assertEqual(
+            window.canvas.create_text.call_args.kwargs["state"],
+            "disabled",
+        )
+        self.assertEqual(
+            window.canvas.create_rectangle.call_args.kwargs["state"],
+            "disabled",
+        )
+
+    def test_encounter_region_uses_full_cell_and_in_cell_roster(self) -> None:
+        window = CoordinateMapWindow.__new__(CoordinateMapWindow)
+        window.canvas = Mock()
+        region = MapRegion(
+            0,
+            0,
+            16,
+            16,
+            "Enemies",
+            "Low\nSlime (Lv 1), Black Raven (Lv 2)",
+            "encounters",
+            "#27824a",
+            "Slime Lv 1\nBlack Raven Lv 2",
+            "Slime\n+1",
+        )
+
+        window._create_encounter_region(region, 10, 20, 50, 60, "region-0")
+
+        window.canvas.create_rectangle.assert_called_once_with(
+            10,
+            20,
+            50,
+            60,
+            fill="#27824a",
+            stipple="gray12",
+            outline="#27824a",
+            width=2,
+            tags=("region-0", "region", "encounter-cell"),
+        )
+        self.assertEqual(window.canvas.create_text.call_count, 2)
+        for call in window.canvas.create_text.call_args_list:
+            self.assertEqual(call.kwargs["text"], "Slime\n+1")
+            self.assertEqual(call.kwargs["state"], "disabled")
+
+    def test_zoomed_encounter_cell_lists_multiple_enemies(self) -> None:
+        window = CoordinateMapWindow.__new__(CoordinateMapWindow)
+        window.canvas = Mock()
+        region = MapRegion(
+            0,
+            0,
+            16,
+            16,
+            "Enemies",
+            kind="encounters",
+            label="Slime Lv 1\nBlack Raven Lv 2",
+            compact_label="Slime\n+1",
+        )
+
+        window._create_encounter_region(region, 0, 0, 100, 100, "region-0")
+
+        for call in window.canvas.create_text.call_args_list:
+            self.assertEqual(
+                call.kwargs["text"],
+                "Slime Lv 1\nBlack Raven Lv 2",
+            )
+
+    def test_waypoint_tooltip_does_not_intercept_hover_events(self) -> None:
+        window = CoordinateMapWindow.__new__(CoordinateMapWindow)
+        window.canvas = Mock()
+        window.canvas.create_text.return_value = 10
+        window.canvas.bbox.return_value = (10, 10, 100, 50)
+
+        window._show_waypoint(MapWaypoint(1, 2, "Shop"), 20, 20)
+
+        self.assertEqual(
+            window.canvas.create_text.call_args.kwargs["state"],
+            "disabled",
+        )
+        self.assertEqual(
+            window.canvas.create_rectangle.call_args.kwargs["state"],
+            "disabled",
+        )
 
     def test_leaving_town_resumes_live_world_position(self) -> None:
         previous = MapPosition("World", 0, 53, 89, True)

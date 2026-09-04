@@ -15,6 +15,7 @@ class RetroArchStatus:
 class PanelRow:
     text: str
     caught: bool | None = None
+    tooltip: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +113,8 @@ class MapRegion:
     detail: str = ""
     kind: str = "region"
     color: str = "#f8c24e"
+    label: str = ""
+    compact_label: str = ""
 
 
 @dataclass(frozen=True, slots=True)
