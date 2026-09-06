@@ -193,9 +193,11 @@ class CoordinateMapWindow:
     PATH_CHUNK_POINTS = 1024
     PATH_INCREMENT_LIMIT = 128
     RESIZE_REDRAW_DELAY_MS = 50
+    OBJECTIVE_FLASH_INTERVAL_MS = 450
     OVERLAY_LABELS = {
         "player": "Player",
         "path": "Hero's path",
+        "objective": "Next objective",
         "entrance": "Entrances",
         "collectibles": "Collectibles",
         "npcs": "NPCs",
@@ -228,6 +230,8 @@ class CoordinateMapWindow:
         self._images: dict[str, Image.Image] = {}
         self._fit_images: dict[tuple[str, int, int], Image.Image] = {}
         self._redraw_job: str | None = None
+        self._objective_flash_job: str | None = None
+        self._objective_flash_visible = True
         self._destroyed = False
         self._drawn_path_lengths: dict[str, int] = {}
         self._overlay_waypoints: dict[str, tuple[MapWaypoint, ...]] = {}
@@ -482,6 +486,7 @@ class CoordinateMapWindow:
     def hide(self) -> None:
         LOGGER.info("Map window hide compact=%s", self.compact)
         self._cancel_redraw()
+        self._cancel_objective_flash()
         self.window.withdraw()
 
     def destroy(self) -> None:
@@ -493,6 +498,7 @@ class CoordinateMapWindow:
         )
         self._destroyed = True
         self._cancel_redraw()
+        self._cancel_objective_flash()
         self._photo = None
         self._photo_key = None
         for image in self._fit_images.values():
@@ -609,7 +615,7 @@ class CoordinateMapWindow:
                 stale.close()
 
     def _is_visible(self) -> bool:
-        if self._destroyed:
+        if getattr(self, "_destroyed", False):
             return False
         try:
             return self.window.state() != "withdrawn"
@@ -625,6 +631,43 @@ class CoordinateMapWindow:
             self.window.after_cancel(job)
         except tk.TclError:
             pass
+
+    def _cancel_objective_flash(self) -> None:
+        job = getattr(self, "_objective_flash_job", None)
+        self._objective_flash_job = None
+        if job is None:
+            return
+        try:
+            self.window.after_cancel(job)
+        except tk.TclError:
+            pass
+
+    def _start_objective_flash(self) -> None:
+        self._cancel_objective_flash()
+        if not hasattr(self, "window"):
+            return
+        if not self._is_visible() or not self.canvas.find_withtag("objective-flash"):
+            return
+        self._objective_flash_visible = True
+        self.canvas.itemconfigure("objective-flash", state="normal")
+        self._objective_flash_job = self.window.after(
+            self.OBJECTIVE_FLASH_INTERVAL_MS,
+            self._toggle_objective_flash,
+        )
+
+    def _toggle_objective_flash(self) -> None:
+        self._objective_flash_job = None
+        if not self._is_visible() or not self.canvas.find_withtag("objective-flash"):
+            return
+        self._objective_flash_visible = not self._objective_flash_visible
+        self.canvas.itemconfigure(
+            "objective-flash",
+            state="normal" if self._objective_flash_visible else "hidden",
+        )
+        self._objective_flash_job = self.window.after(
+            self.OBJECTIVE_FLASH_INTERVAL_MS,
+            self._toggle_objective_flash,
+        )
 
     def _schedule_redraw(self, _event: tk.Event | None = None) -> None:
         if self._destroyed:
@@ -738,6 +781,7 @@ class CoordinateMapWindow:
             self._set_hang_context("idle-after-full-redraw")
 
     def _draw(self) -> None:
+        self._cancel_objective_flash()
         self.canvas.delete("all")
         self._drawn_path_lengths.clear()
         if self.position is None:
@@ -967,6 +1011,7 @@ class CoordinateMapWindow:
         self.heading.configure(
             text=f"{map_name} · ({self.position.x},{self.position.y}){location_note}"
         )
+        self._start_objective_flash()
 
     def _create_encounter_region(
         self,
@@ -1020,6 +1065,31 @@ class CoordinateMapWindow:
         point_y: float,
         tag: str,
     ) -> None:
+        if waypoint.kind == "objective":
+            self.canvas.create_oval(
+                point_x - 11,
+                point_y - 11,
+                point_x + 11,
+                point_y + 11,
+                outline="#f8c24e",
+                width=3,
+                tags=(tag, "waypoint", "objective-flash"),
+            )
+            self.canvas.create_polygon(
+                point_x,
+                point_y - 7,
+                point_x + 7,
+                point_y,
+                point_x,
+                point_y + 7,
+                point_x - 7,
+                point_y,
+                fill="#bb3e2f",
+                outline="#ffffff",
+                width=2,
+                tags=(tag, "waypoint", "objective-marker"),
+            )
+            return
         if waypoint.kind != "npcs":
             color = (
                 "#16817a" if waypoint.kind == "collectibles" else "#bb3e2f"

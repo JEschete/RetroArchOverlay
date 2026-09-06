@@ -854,6 +854,46 @@ class MapProjectionTests(unittest.TestCase):
             "disabled",
         )
 
+    def test_objective_waypoint_has_persistent_marker_and_flashing_ring(self) -> None:
+        window = CoordinateMapWindow.__new__(CoordinateMapWindow)
+        window.canvas = Mock()
+        waypoint = MapWaypoint(
+            42,
+            73,
+            "Next: Tedanki",
+            kind="objective",
+            marker="objective",
+        )
+
+        window._create_waypoint_marker(waypoint, 100, 120, "waypoint-0")
+
+        ring = window.canvas.create_oval.call_args
+        marker = window.canvas.create_polygon.call_args
+        self.assertIn("objective-flash", ring.kwargs["tags"])
+        self.assertIn("objective-marker", marker.kwargs["tags"])
+
+    def test_objective_ring_flashes_and_reschedules(self) -> None:
+        window = CoordinateMapWindow.__new__(CoordinateMapWindow)
+        window.window = Mock()
+        window.window.state.return_value = "normal"
+        window.window.after.return_value = "next-job"
+        window.canvas = Mock()
+        window.canvas.find_withtag.return_value = (1,)
+        window._destroyed = False
+        window._objective_flash_job = None
+        window._objective_flash_visible = True
+
+        window._toggle_objective_flash()
+
+        window.canvas.itemconfigure.assert_called_once_with(
+            "objective-flash", state="hidden"
+        )
+        window.window.after.assert_called_once_with(
+            CoordinateMapWindow.OBJECTIVE_FLASH_INTERVAL_MS,
+            window._toggle_objective_flash,
+        )
+        self.assertEqual(window._objective_flash_job, "next-job")
+
     def test_leaving_town_resumes_live_world_position(self) -> None:
         previous = MapPosition("World", 0, 53, 89, True)
         current = MapPosition("World", 0, 54, 89, True)
