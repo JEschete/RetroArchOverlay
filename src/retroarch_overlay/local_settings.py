@@ -34,21 +34,6 @@ class LocalPluginSettings:
         config = root / "retroarch.cfg"
         return config if config.is_file() else None
 
-    def detail_window_position(self, key: str) -> tuple[int, int] | None:
-        positions = self._document().get("detail_window_positions", {})
-        if not isinstance(positions, dict):
-            return None
-        position = positions.get(key)
-        if not isinstance(position, dict):
-            return None
-        x = position.get("x")
-        y = position.get("y")
-        if not isinstance(x, int) or isinstance(x, bool):
-            return None
-        if not isinstance(y, int) or isinstance(y, bool):
-            return None
-        return x, y
-
     def layout_profile(self) -> LayoutProfile:
         value = self._document().get("layout_profile", {})
         if not isinstance(value, dict):
@@ -105,6 +90,127 @@ class LocalPluginSettings:
         }
         self._write(document)
 
+    def hero_paths_path(self) -> Path:
+        return self.path.with_name("hero_paths.json")
+
+    def hero_paths(self, title: str) -> dict[str, list[tuple[int, int]]]:
+        path = self.hero_paths_path()
+        if not path.is_file():
+            return {}
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(document, dict):
+            return {}
+        stored = document.get(title)
+        if not isinstance(stored, dict):
+            return {}
+        paths: dict[str, list[tuple[int, int]]] = {}
+        for key, points in stored.items():
+            if not isinstance(key, str) or not isinstance(points, list):
+                continue
+            cleaned = [
+                (point[0], point[1])
+                for point in points
+                if isinstance(point, list)
+                and len(point) == 2
+                and all(isinstance(value, int) for value in point)
+            ]
+            if cleaned:
+                paths[key] = cleaned
+        return paths
+
+    def save_hero_paths(
+        self, title: str, paths: dict[str, list[tuple[int, int]]], limit: int = 20_000
+    ) -> None:
+        path = self.hero_paths_path()
+        document: dict[str, object] = {}
+        if path.is_file():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    document = loaded
+            except (OSError, json.JSONDecodeError):
+                document = {}
+        trimmed = {
+            key: [list(point) for point in points[-limit:]]
+            for key, points in paths.items()
+            if points
+        }
+        if trimmed:
+            document[title] = trimmed
+        else:
+            document.pop(title, None)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(document, separators=(",", ":")), encoding="utf-8")
+
+    def map_view_state(self, key: str) -> dict[str, object]:
+        values = self._document().get("map_view_states", {})
+        if not isinstance(values, dict):
+            return {}
+        value = values.get(key)
+        return value if isinstance(value, dict) else {}
+
+    def save_map_view_state(self, key: str, state: dict[str, object]) -> None:
+        document = self._document()
+        values = document.setdefault("map_view_states", {})
+        if not isinstance(values, dict):
+            values = {}
+            document["map_view_states"] = values
+        values[key] = state
+        self._write(document)
+
+    def theme(self) -> str:
+        """Stored theme preference: auto, light, dark or high-contrast.
+
+        Falls back to the legacy high_contrast flag so an existing override
+        keeps working after the upgrade.
+        """
+        value = self._document().get("theme")
+        if isinstance(value, str) and value:
+            return value
+        if self.high_contrast_override():
+            return "high-contrast"
+        return "auto"
+
+    def save_theme(self, value: str) -> None:
+        document = self._document()
+        document["theme"] = value
+        self._write(document)
+
+    def overlay_opacity(self) -> float | None:
+        """Saved rail opacity in 0.3-1.0, or None when never set."""
+        value = self._document().get("overlay_opacity")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return None
+        if not 0.3 <= float(value) <= 1.0:
+            return None
+        return float(value)
+
+    def save_overlay_opacity(self, value: float) -> None:
+        document = self._document()
+        document["overlay_opacity"] = round(max(0.3, min(1.0, float(value))), 2)
+        self._write(document)
+
+    def active_role(self, game: str) -> str | None:
+        roles = self._document().get("active_roles", {})
+        if not isinstance(roles, dict):
+            return None
+        value = roles.get(game)
+        return value if isinstance(value, str) and value else None
+
+    def save_active_role(self, game: str, role: str) -> None:
+        if not game:
+            return
+        document = self._document()
+        roles = document.setdefault("active_roles", {})
+        if not isinstance(roles, dict):
+            roles = {}
+            document["active_roles"] = roles
+        roles[game] = role
+        self._write(document)
+
     def high_contrast_override(self) -> bool | None:
         value = self._document().get("high_contrast")
         return value if isinstance(value, bool) else None
@@ -115,15 +221,6 @@ class LocalPluginSettings:
             document.pop("high_contrast", None)
         else:
             document["high_contrast"] = value
-        self._write(document)
-
-    def save_detail_window_position(self, key: str, x: int, y: int) -> None:
-        document = self._document()
-        positions = document.setdefault("detail_window_positions", {})
-        if not isinstance(positions, dict):
-            positions = {}
-            document["detail_window_positions"] = positions
-        positions[key] = {"x": x, "y": y}
         self._write(document)
 
     def save_retroarch_path(self, retroarch_path: Path | None) -> None:

@@ -100,7 +100,7 @@ class OverlayController:
         client: RetroArchSession,
         registry: AdapterRegistry,
         *,
-        poll_interval_seconds: float = 0.1,
+        poll_interval_seconds: float = 0.05,
         cadence: SnapshotCadence | None = None,
         retry_policy: RetryPolicy | None = None,
         verify_content_after_snapshot: bool = True,
@@ -165,7 +165,7 @@ class OverlayController:
                 "Not connected",
                 str(error),
             )
-            self._last_status = status
+        self._last_status = status
 
         current_time = time.monotonic() if now is None else now
         if status.state not in {"PLAYING", "PAUSED"}:
@@ -175,8 +175,7 @@ class OverlayController:
                 "RetroArch idle",
                 f"RetroArch is {status.state.lower()}",
             )
-        if not self._cadence.should_snapshot(status, current_time):
-            return None
+        should_snapshot = self._cadence.should_snapshot(status, current_time)
 
         try:
             adapter = self._registry.find(status)
@@ -193,6 +192,15 @@ class OverlayController:
                 "Unsupported game",
                 f"No adapter for {status.core}: {status.content}",
             )
+
+        capture = getattr(adapter, "capture", None)
+        if status.state == "PLAYING" and not should_snapshot and callable(capture):
+            try:
+                capture(self._client)
+            except Exception as error:
+                LOGGER.warning("Plugin high-frequency capture failed: %s", error)
+        if not should_snapshot:
+            return None
 
         try:
             snapshot_started = time.perf_counter()

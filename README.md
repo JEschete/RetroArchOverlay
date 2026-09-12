@@ -13,9 +13,13 @@ Installed plugins declare their native display geometry. On Windows, the overlay
 - Game Boy Advance defaults to integer-perfect `240x160` scaling, preferring `6x` (`1440x960`) on a 1080p display.
 - 4:3 content remains aspect-correct and uses the wider side space available on 16:9 monitors.
 
-Use the gear button in the overlay header to choose Auto, Rail, Dual Strips, or Overlay mode; rail side and width; compact or normal density; integer or fit scaling; emulator-window management; and high contrast. Layout and main/map/detail window geometry are saved under `%LOCALAPPDATA%/RetroArchOverlay/local_settings.json`.
+Use the gear button in the overlay header to choose Auto, Rail, Dual Strips, or Overlay mode; rail side and width; compact or normal density; integer or fit scaling; emulator-window management; the theme; and rail opacity. Themes are Auto, Light, Dark, or High Contrast; Auto follows the Windows app theme and is overridden by the system high-contrast setting. The rail is fully opaque by default; lowering opacity makes it see-through while idle and it lifts toward legible on hover. Layout, theme, opacity, the active rail tab per game, and main/map window geometry are saved under `%LOCALAPPDATA%/RetroArchOverlay/local_settings.json`.
 
-Keyboard access includes `Tab`/`Shift+Tab` for controls, `Escape` to collapse or expand, `Alt+M` for the map, `Alt+N` for the minimap, and `Page Up`/`Page Down` for scrolling.
+The rail tabs are All, Area, Party, and Goals. All is the default and shows every section in one scroll; the others narrow it to that role, with urgent sections always kept visible.
+
+Panel rows carry optional structure that plugins may supply: a progress bar, coloured chips, a small icon, and an emphasis colour. Section detail views expand inline within the rail, and lists longer than a dozen rows gain a type-to-filter box.
+
+Keyboard access includes `Tab`/`Shift+Tab` for controls, `1`-`4` to switch rail tabs, `Escape` to collapse or expand, `Alt+M` for the map, `Alt+N` for the minimap, and `Page Up`/`Page Down` for scrolling.
 
 Runtime diagnostics are written to `%LOCALAPPDATA%/RetroArchOverlay/logs/retroarch-overlay.log` with bounded rotation. `--log-level`, `--retroarch-timeout`, and `--snapshot-interval` tune diagnostics and polling without source changes.
 

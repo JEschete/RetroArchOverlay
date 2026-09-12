@@ -85,10 +85,13 @@ class ResponsiveLayoutManager:
         elif self._managed_target is not None:
             self.restore_retroarch_window()
 
-        panel = layout.primary_panel
-        target.geometry(
-            f"{panel.width}x{panel.height}{panel.left:+d}{panel.top:+d}"
-        )
+        # Only assert the rail geometry when the layout actually changed, so a
+        # manually dragged overlay window is not snapped back every refresh.
+        if changed:
+            panel = layout.primary_panel
+            target.geometry(
+                f"{panel.width}x{panel.height}{panel.left:+d}{panel.top:+d}"
+            )
         return layout, changed
 
     def restore_retroarch_window(self) -> None:

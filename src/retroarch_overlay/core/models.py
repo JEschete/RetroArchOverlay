@@ -12,10 +12,25 @@ class RetroArchStatus:
 
 
 @dataclass(frozen=True, slots=True)
+class PanelChip:
+    """A small colored badge rendered after a row's text (type, status, verdict)."""
+
+    text: str
+    background: str = "#687064"
+    foreground: str = "#ffffff"
+
+
+@dataclass(frozen=True, slots=True)
 class PanelRow:
     text: str
     caught: bool | None = None
     tooltip: str = ""
+    # Optional structure. Hosts that predate these fields ignore them.
+    emphasis: str = ""  # "", "heading", "muted", "success", "warning", "danger"
+    progress: float | None = None  # 0.0-1.0 renders a bar under the text
+    progress_color: str = ""  # "" picks a color from the progress value
+    icon: str = ""  # absolute path to a small image rendered before the text
+    chips: tuple[PanelChip, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +152,9 @@ class MapLayer:
     image_loader: Callable[[], Path] | None = None
     waypoints: tuple[MapWaypoint, ...] = ()
     regions: tuple[MapRegion, ...] = ()
+    # True only for genuinely toroidal maps, where walking off one edge brings
+    # you out of the other. Everything else clamps at its borders.
+    wraps: bool = False
 
 
 @dataclass(frozen=True, slots=True)

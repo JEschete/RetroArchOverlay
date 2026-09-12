@@ -39,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", default=55355, type=int)
     parser.add_argument("--retroarch-timeout", default=0.4, type=float)
     parser.add_argument("--snapshot-interval", default=0.25, type=float)
-    parser.add_argument("--opacity", default=0.72, type=float)
+    parser.add_argument("--opacity", default=1.0, type=float)
     parser.add_argument(
         "--log-level",
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),

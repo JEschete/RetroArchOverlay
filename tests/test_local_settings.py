@@ -87,30 +87,6 @@ class LocalPluginSettingsTests(unittest.TestCase):
             self.assertIsNone(settings.rom_path("org.example.game"))
             self.assertEqual(settings.save_path("org.example.game"), save.resolve())
 
-    def test_saves_and_loads_detail_window_position(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            settings = LocalPluginSettings(Path(directory) / "local_settings.json")
-
-            settings.save_detail_window_position("Emerald|POC", 42, 137)
-
-            reloaded = LocalPluginSettings(settings.path)
-            self.assertEqual(
-                reloaded.detail_window_position("Emerald|POC"),
-                (42, 137),
-            )
-
-    def test_ignores_malformed_detail_window_position(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "local_settings.json"
-            path.write_text(
-                json.dumps({"detail_window_positions": {"Emerald|POC": {"x": "42", "y": 137}}}),
-                encoding="utf-8",
-            )
-
-            self.assertIsNone(
-                LocalPluginSettings(path).detail_window_position("Emerald|POC")
-            )
-
     def test_saves_layout_and_window_geometry(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             settings = LocalPluginSettings(Path(directory) / "local_settings.json")
@@ -141,6 +117,107 @@ class LocalPluginSettingsTests(unittest.TestCase):
 
             self.assertEqual(settings.layout_profile(), LayoutProfile())
             self.assertIsNone(settings.rom_path("org.example.game"))
+
+
+class ThemeAndRoleTests(unittest.TestCase):
+    def test_theme_defaults_to_auto_and_round_trips(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = LocalPluginSettings(Path(directory) / "local_settings.json")
+
+            self.assertEqual(settings.theme(), "auto")
+            settings.save_theme("dark")
+
+            self.assertEqual(LocalPluginSettings(settings.path).theme(), "dark")
+
+    def test_legacy_high_contrast_flag_migrates_to_a_theme(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = LocalPluginSettings(Path(directory) / "local_settings.json")
+            settings.save_high_contrast_override(True)
+
+            self.assertEqual(
+                LocalPluginSettings(settings.path).theme(), "high-contrast"
+            )
+
+    def test_an_explicit_theme_wins_over_the_legacy_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = LocalPluginSettings(Path(directory) / "local_settings.json")
+            settings.save_high_contrast_override(True)
+            settings.save_theme("light")
+
+            self.assertEqual(LocalPluginSettings(settings.path).theme(), "light")
+
+    def test_overlay_opacity_round_trips_and_clamps(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = LocalPluginSettings(Path(directory) / "local_settings.json")
+
+            self.assertIsNone(settings.overlay_opacity())
+            settings.save_overlay_opacity(0.85)
+            self.assertEqual(
+                LocalPluginSettings(settings.path).overlay_opacity(), 0.85
+            )
+
+            settings.save_overlay_opacity(5.0)
+            self.assertEqual(LocalPluginSettings(settings.path).overlay_opacity(), 1.0)
+
+    def test_out_of_range_stored_opacity_is_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "local_settings.json"
+            path.write_text(json.dumps({"overlay_opacity": 0.05}), encoding="utf-8")
+
+            self.assertIsNone(LocalPluginSettings(path).overlay_opacity())
+
+    def test_active_role_is_remembered_per_game(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = LocalPluginSettings(Path(directory) / "local_settings.json")
+
+            settings.save_active_role("Pokémon Emerald", "goals")
+            settings.save_active_role("Dragon Warrior III", "party")
+
+            reloaded = LocalPluginSettings(settings.path)
+            self.assertEqual(reloaded.active_role("Pokémon Emerald"), "goals")
+            self.assertEqual(reloaded.active_role("Dragon Warrior III"), "party")
+            self.assertIsNone(reloaded.active_role("Unplayed Game"))
+
+    def test_a_nameless_game_does_not_create_a_role_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = LocalPluginSettings(Path(directory) / "local_settings.json")
+
+            settings.save_active_role("", "goals")
+
+            self.assertIsNone(LocalPluginSettings(settings.path).active_role(""))
+
+
+class MapViewStateTests(unittest.TestCase):
+    def test_map_view_state_round_trips_per_window(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = LocalPluginSettings(Path(directory) / "local_settings.json")
+            state = {
+                "layer": "route119",
+                "overlays": {"trainers": False, "items": True},
+                "hide_completed": True,
+                "opacity": 0.75,
+            }
+
+            settings.save_map_view_state("map", state)
+
+            self.assertEqual(settings.map_view_state("map"), state)
+            self.assertEqual(settings.map_view_state("minimap"), {})
+
+    def test_map_view_state_survives_a_new_settings_instance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "local_settings.json"
+            LocalPluginSettings(path).save_map_view_state("map", {"opacity": 0.5})
+
+            self.assertEqual(
+                LocalPluginSettings(path).map_view_state("map"), {"opacity": 0.5}
+            )
+
+    def test_corrupt_map_view_state_is_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "local_settings.json"
+            path.write_text(json.dumps({"map_view_states": "nonsense"}), encoding="utf-8")
+
+            self.assertEqual(LocalPluginSettings(path).map_view_state("map"), {})
 
 
 if __name__ == "__main__":

@@ -15,6 +15,10 @@ class CompanionLayout:
 def sections_for_role(
     sections: tuple[PanelSection, ...], role: str
 ) -> tuple[PanelSection, ...]:
+    # "all" is the default rail view: every section in one scroll, which is
+    # how the panel behaved before the tabs became a filter.
+    if role == "all":
+        return sections
     specialized = any(
         section.role in {"area", "party", "goals", "urgent"}
         for section in sections

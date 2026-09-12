@@ -49,6 +49,11 @@ class RepositoryAdapter:
     def snapshot(self, memory: object) -> OverlaySnapshot:
         return self._load_adapter().snapshot(memory)  # type: ignore[arg-type]
 
+    def capture(self, memory: object) -> None:
+        capture = getattr(self._load_adapter(), "capture", None)
+        if callable(capture):
+            capture(memory)
+
     def _load_adapter(self) -> GameAdapter:
         if self._adapter is not None:
             return self._adapter

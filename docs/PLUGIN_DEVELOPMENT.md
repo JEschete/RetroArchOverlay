@@ -145,6 +145,12 @@ Keep `plugin.py` lightweight. Do not read a decomp, import optional tooling, ope
 
 The adapter receives shared services and its repository path through `GameContext`. Game code may import framework contracts and immutable presentation models. It must not import Tk widgets, credential implementations, sockets, or another plugin.
 
+### Optional high-frequency capture
+
+An adapter may expose `capture(memory) -> None` for lightweight telemetry that must survive fast-forward between full UI snapshots. The controller invokes it every 50 ms while RetroArch is playing and skips it on ticks that already call `snapshot(memory)`. Capture failures are logged and do not block normal snapshots.
+
+Keep this hook narrowly bounded: read only the memory required for transition detection, avoid network or decomp work, collapse identical samples, and persist incrementally outside the repository. The hook runs on the controller thread, so it must return promptly. Full presentation remains owned by `snapshot(memory)`.
+
 ## Add a Decomp Later
 
 A plugin can begin without a decomp. Record or install one later without replacing adapter code:
@@ -234,7 +240,7 @@ Every generated plugin may use `game/data/retroachievements/code_notes.json` and
 
 The Discover RA action uses the public Web API. It hashes the machine-local Path to ROM in its background task, then considers configured hashes, an existing code-note game ID, and finally title matching. A single exact normalized title match is accepted automatically. Any inexact or ambiguous result opens a picker showing the title, console, and RA game ID. When a local patched ROM resolves to a subset, discovery follows its parent relationship and stores the authoritative hash union for that subset and parent. It also derives stable platform aliases from the RA console name and adds installed core identifiers whose `info/*.info` metadata matches that console in the RetroArch folder selected under Settings. The patch itself is not needed or tracked.
 
-Overlay status remains responsive at two checks per second. Live game memory is sampled at most once per second, paused games are sampled once and then left idle, and RetroAchievements progress is loaded from a five-minute local cache or refreshed in the background. Switching games therefore does not wait on the RA network request.
+Overlay status is polled every 50 ms so selected plugins may perform lightweight high-frequency capture. Full live snapshots keep their configured cadence, paused games are sampled once and then left idle, and RetroAchievements progress is loaded from a five-minute local cache or refreshed in the background. Switching games therefore does not wait on the RA network request.
 
 Credential precedence is `RETROACHIEVEMENTS_API_KEY`, the RetroArch Overlay OS keyring entry, then the credentials saved by the RA_Backlog_Timer website under keyring service `RAHLTBScraper` or its existing `%LOCALAPPDATA%/RA_Backlog_Timer/.ra_credentials.json` fallback. If none is configured, the manager prompts for the Web API key. The key is never written to the plugin.
 

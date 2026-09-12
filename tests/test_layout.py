@@ -77,6 +77,16 @@ class SemanticSectionTests(unittest.TestCase):
             ("Alert", "POC"),
         )
 
+    def test_all_keeps_every_section_including_goals(self) -> None:
+        sections = (
+            PanelSection("Alert", (), role="urgent"),
+            PanelSection("Route", (), role="area"),
+            PanelSection("Party", (), role="party"),
+            PanelSection("Professor Oak Challenge", (), role="goals"),
+        )
+
+        self.assertEqual(sections_for_role(sections, "all"), sections)
+
 
 if __name__ == "__main__":
     unittest.main()
