@@ -9,8 +9,9 @@ class LayoutSettingsDialog:
         self,
         owner: tk.Misc,
         profile: LayoutProfile,
-        high_contrast: bool,
-        on_save: Callable[[LayoutProfile, bool], None],
+        theme: str,
+        opacity: float,
+        on_save: Callable[[LayoutProfile, str, float], None],
     ) -> None:
         self.window = tk.Toplevel(owner)
         self.window.title("Overlay Layout")
@@ -24,7 +25,8 @@ class LayoutSettingsDialog:
         self.density = tk.StringVar(value=profile.density)
         self.scaling = tk.StringVar(value=profile.game_scaling)
         self.manage_window = tk.BooleanVar(value=profile.manage_retroarch_window)
-        self.high_contrast = tk.BooleanVar(value=high_contrast)
+        self.theme = tk.StringVar(value=theme)
+        self.opacity_percent = tk.IntVar(value=int(round(opacity * 100)))
 
         header = tk.Frame(self.window, background="#20251f", padx=16, pady=12)
         header.pack(fill="x")
@@ -41,6 +43,9 @@ class LayoutSettingsDialog:
         self._choice(body, "SIDE", self.side, ("left", "right"))
         self._choice(body, "DENSITY", self.density, ("compact", "normal"))
         self._choice(body, "GAME SCALE", self.scaling, ("auto", "integer", "fit"))
+        self._choice(
+            body, "THEME", self.theme, ("auto", "light", "dark", "high-contrast")
+        )
 
         width_row = tk.Frame(body, background="#f4f1e8")
         width_row.pack(fill="x", pady=(8, 0))
@@ -60,21 +65,36 @@ class LayoutSettingsDialog:
             width=6,
             font=("Consolas", 10),
         ).pack(side="right")
-        for text, variable in (
-            ("Resize windowed RetroArch", self.manage_window),
-            ("High contrast", self.high_contrast),
-        ):
-            tk.Checkbutton(
-                body,
-                text=text,
-                variable=variable,
-                background="#f4f1e8",
-                activebackground="#f4f1e8",
-                foreground="#20251f",
-                selectcolor="#f4f1e8",
-                font=("Segoe UI", 9),
-                anchor="w",
-            ).pack(fill="x", pady=(8, 0))
+
+        opacity_row = tk.Frame(body, background="#f4f1e8")
+        opacity_row.pack(fill="x", pady=(8, 0))
+        tk.Label(
+            opacity_row,
+            text="OPACITY %",
+            background="#f4f1e8",
+            foreground="#20251f",
+            font=("Segoe UI Semibold", 9),
+        ).pack(side="left")
+        tk.Spinbox(
+            opacity_row,
+            from_=30,
+            to=100,
+            increment=5,
+            textvariable=self.opacity_percent,
+            width=6,
+            font=("Consolas", 10),
+        ).pack(side="right")
+        tk.Checkbutton(
+            body,
+            text="Resize windowed RetroArch",
+            variable=self.manage_window,
+            background="#f4f1e8",
+            activebackground="#f4f1e8",
+            foreground="#20251f",
+            selectcolor="#f4f1e8",
+            font=("Segoe UI", 9),
+            anchor="w",
+        ).pack(fill="x", pady=(8, 0))
         footer = tk.Frame(self.window, background="#e6e1d4", padx=16, pady=10)
         footer.pack(fill="x")
         tk.Button(
@@ -149,5 +169,6 @@ class LayoutSettingsDialog:
             game_scaling=self.scaling.get(),
             manage_retroarch_window=self.manage_window.get(),
         )
-        self._on_save(profile, self.high_contrast.get())
+        opacity = max(30, min(100, self.opacity_percent.get())) / 100
+        self._on_save(profile, self.theme.get(), opacity)
         self.window.destroy()

@@ -270,11 +270,12 @@ class CaughtFilterTests(unittest.TestCase):
         self.assertEqual(expanded, section.rows)
         self.assertEqual(expanded_hidden_count, 0)
 
-    def test_main_overlay_keeps_all_roles_and_real_species_rows(self) -> None:
+    def test_active_tab_filters_sections_by_role(self) -> None:
         overlay = OverlayWindow.__new__(OverlayWindow)
         overlay._hide_caught = Mock()
         overlay._hide_caught.get.return_value = False
         overlay._expanded_sections = set()
+        overlay._active_role = Mock()
         snapshot = OverlaySnapshot(
             "Pokemon Emerald",
             "Route 104",
@@ -292,6 +293,9 @@ class CaughtFilterTests(unittest.TestCase):
                     compact_rows=(PanelRow("1 goal"),),
                 ),
                 PanelSection(
+                    "Battle", (PanelRow("Wild Marill"),), role="urgent", priority=1
+                ),
+                PanelSection(
                     "Water",
                     (PanelRow("Marill Lv 5-15 60%"), PanelRow("Wingull Lv 10 40%")),
                     role="area",
@@ -300,17 +304,104 @@ class CaughtFilterTests(unittest.TestCase):
             ),
         )
 
-        views = overlay._section_views(snapshot)
+        overlay._active_role.get.return_value = "area"
+        area_views = overlay._section_views(snapshot)
+        overlay._active_role.get.return_value = "party"
+        party_views = overlay._section_views(snapshot)
 
         self.assertEqual(
-            tuple(section.title for section, _, _, _ in views),
-            ("Party", "Goals", "Water"),
+            tuple(section.title for section, _, _, _ in area_views),
+            ("Battle", "Water"),
         )
-        water_rows = next(rows for section, rows, _, _ in views if section.title == "Water")
+        self.assertEqual(
+            tuple(section.title for section, _, _, _ in party_views),
+            ("Battle", "Party"),
+        )
+        water_rows = next(
+            rows for section, rows, _, _ in area_views if section.title == "Water"
+        )
         self.assertEqual(
             tuple(row.text for row in water_rows),
             ("Marill Lv 5-15 60%", "Wingull Lv 10 40%"),
         )
+
+    def test_default_tab_shows_goals_sections_such_as_poc(self) -> None:
+        # Regression: the rail defaulted to "area", which silently hid every
+        # goals section, including the Professor Oak Challenge.
+        overlay = OverlayWindow.__new__(OverlayWindow)
+        overlay._hide_caught = Mock()
+        overlay._hide_caught.get.return_value = False
+        overlay._expanded_sections = set()
+        overlay._active_role = Mock()
+        overlay._active_role.get.return_value = "all"
+        snapshot = OverlaySnapshot(
+            "Pokemon Emerald",
+            "Route 104",
+            (
+                PanelSection("Water", (PanelRow("Marill"),), role="area"),
+                PanelSection("Party", (PanelRow("Marshtomp"),), role="party"),
+                PanelSection(
+                    "Professor Oak Challenge",
+                    (PanelRow("Next: Roxanne 12/39"),),
+                    role="goals",
+                ),
+            ),
+        )
+
+        titles = tuple(
+            section.title for section, _, _, _ in overlay._section_views(snapshot)
+        )
+
+        self.assertIn("Professor Oak Challenge", titles)
+        self.assertEqual(len(titles), 3)
+
+    def test_unspecialized_sections_ignore_the_active_tab(self) -> None:
+        overlay = OverlayWindow.__new__(OverlayWindow)
+        overlay._hide_caught = Mock()
+        overlay._hide_caught.get.return_value = False
+        overlay._expanded_sections = set()
+        overlay._active_role = Mock()
+        overlay._active_role.get.return_value = "party"
+        snapshot = OverlaySnapshot(
+            "Simple Game",
+            "Area",
+            (PanelSection("Status", (PanelRow("All good"),)),),
+        )
+
+        views = overlay._section_views(snapshot)
+
+        self.assertEqual(
+            tuple(section.title for section, _, _, _ in views), ("Status",)
+        )
+
+
+class OverlayOpacityTests(unittest.TestCase):
+    def test_hover_never_makes_an_opaque_rail_transparent(self) -> None:
+        overlay = OverlayWindow.__new__(OverlayWindow)
+        overlay._idle_opacity = 1.0
+
+        self.assertEqual(overlay._hover_opacity(), 1.0)
+
+    def test_hover_lifts_a_see_through_rail_toward_legibility(self) -> None:
+        overlay = OverlayWindow.__new__(OverlayWindow)
+        overlay._idle_opacity = 0.5
+
+        self.assertEqual(overlay._hover_opacity(), 0.96)
+
+    def test_setting_opacity_clamps_and_applies_it(self) -> None:
+        overlay = OverlayWindow.__new__(OverlayWindow)
+        overlay.root = Mock()
+
+        overlay._set_opacity(0.1)
+
+        self.assertEqual(overlay._idle_opacity, 0.3)
+        overlay.root.attributes.assert_called_once_with("-alpha", 0.3)
+
+    def test_the_overlay_defaults_to_fully_opaque(self) -> None:
+        import inspect
+
+        default = inspect.signature(OverlayWindow.__init__).parameters["opacity"].default
+        self.assertEqual(default, 1.0)
 
 
 class MainPanelInteractionTests(unittest.TestCase):
@@ -363,21 +454,23 @@ class MainPanelInteractionTests(unittest.TestCase):
         overlay.root.geometry.assert_not_called()
 
 
-class DetailWindowTests(unittest.TestCase):
-    def test_row_tooltip_metadata_can_refresh_without_rebinding(self) -> None:
+class InlineDetailTests(unittest.TestCase):
+    @staticmethod
+    def _fast_path_overlay(section, row):
         overlay = OverlayWindow.__new__(OverlayWindow)
-        label = Mock()
-        overlay._row_tooltips = {label: "Old details"}
-        overlay._tooltip_widget = label
-        overlay._show_row_tooltip = Mock()
         overlay._last_result = None
         overlay._sync_caught_filter = Mock()
         overlay._sync_map_tools = Mock()
-        overlay._sync_detail_windows = Mock()
-        row = PanelRow("Blaze", tooltip="New details")
-        section = PanelSection("Battle", (row,))
+        overlay._update_now_strip = Mock()
+        overlay._restore_active_role = Mock()
+        overlay._queue_alert_toasts = Mock()
+        overlay._sync_role_tabs = Mock()
+        overlay._expanded_actions = set()
+        overlay._detail_filters = {}
+        overlay._hide_caught = Mock()
+        overlay._hide_caught.get.return_value = False
         overlay._section_views = Mock(
-            return_value=((section, (row,), 0, ("Game", "Battle")),)
+            return_value=((section, (row,), 0, ("Game", section.title)),)
         )
         overlay._layout_signature = Mock(return_value=("stable",))
         overlay._rendered_layout = ("stable",)
@@ -387,12 +480,18 @@ class DetailWindowTests(unittest.TestCase):
         overlay._controller = Mock()
         overlay._controller.metrics.snapshot_seconds = 0.01
         overlay._section_labels = [Mock()]
-        overlay._row_labels = [label]
+        return overlay
+
+    def test_fast_path_updates_row_views_in_place(self) -> None:
+        row = PanelRow("Blaze", tooltip="New details")
+        section = PanelSection("Battle", (row,))
+        overlay = self._fast_path_overlay(section, row)
+        row_view = Mock()
+        overlay._row_views = [row_view]
 
         overlay._render(OverlaySnapshot("Game", "Battle", (section,)))
 
-        self.assertEqual(overlay._row_tooltips[label], "New details")
-        overlay._show_row_tooltip.assert_called_once_with(label)
+        row_view.update.assert_called_once_with(row)
 
     def test_plain_row_can_gain_a_tooltip_on_the_fast_path(self) -> None:
         overlay = OverlayWindow.__new__(OverlayWindow)
@@ -439,62 +538,71 @@ class DetailWindowTests(unittest.TestCase):
 
         self.assertEqual(rows, (PanelRow("Open", False), PanelRow("Info")))
 
-    def test_open_detail_window_refreshes_from_latest_snapshot_action(self) -> None:
-        window = OverlayWindow.__new__(OverlayWindow)
-        body = Mock()
-        original_rows = (PanelRow("Original route"),)
-        window._detail_windows = {
-            ("Game", "OPEN", "Details"): (Mock(), body, original_rows)
-        }
-        window._render_detail_rows = Mock()
-        rows = (PanelRow("Updated route"),)
-        snapshot = OverlaySnapshot(
-            "Game",
-            "Route 2",
-            (PanelSection("Section", (), actions=(PanelAction("OPEN", "Details", rows),)),),
+    def test_expanded_action_rows_join_the_fast_path_updates(self) -> None:
+        row = PanelRow("Battle Frontier")
+        detail_row = PanelRow("Tower · Lv 50 12")
+        section = PanelSection(
+            "Battle Frontier",
+            (row,),
+            actions=(PanelAction("OPEN DASHBOARD", "Dashboard", (detail_row,)),),
         )
+        overlay = self._fast_path_overlay(section, row)
+        overlay._expanded_actions = {
+            ("Game", "Battle Frontier", "OPEN DASHBOARD")
+        }
+        row_view = Mock()
+        detail_view = Mock()
+        overlay._row_views = [row_view, detail_view]
 
-        window._sync_detail_windows(snapshot)
+        overlay._render(OverlaySnapshot("Game", "Route", (section,)))
 
-        window._render_detail_rows.assert_called_once_with(body, rows)
+        row_view.update.assert_called_once_with(row)
+        detail_view.update.assert_called_once_with(detail_row)
 
-    def test_unchanged_detail_rows_are_not_redrawn_while_walking(self) -> None:
+    def test_expanding_an_action_changes_the_layout_signature(self) -> None:
         overlay = OverlayWindow.__new__(OverlayWindow)
-        detail = Mock()
-        body = Mock()
-        rows = (PanelRow("Same route"),)
-        overlay._detail_windows = {
-            ("Game", "OPEN", "Details"): (detail, body, rows)
-        }
-        overlay._render_detail_rows = Mock()
-        snapshot = OverlaySnapshot(
-            "Game",
-            "Route",
-            (PanelSection("Section", (), actions=(PanelAction("OPEN", "Details", rows),)),),
+        overlay._hide_caught = Mock()
+        overlay._hide_caught.get.return_value = False
+        overlay._expanded_actions = set()
+        overlay._detail_filters = {}
+        section = PanelSection(
+            "Section",
+            (PanelRow("Row"),),
+            actions=(PanelAction("OPEN", "Details", (PanelRow("Detail"),)),),
         )
+        snapshot = OverlaySnapshot("Game", "Route", (section,))
+        views = ((section, section.rows, 0, ("Game", "Section")),)
 
-        overlay._sync_detail_windows(snapshot)
+        collapsed = overlay._layout_signature(views, snapshot)
+        overlay._expanded_actions.add(("Game", "Section", "OPEN"))
+        expanded = overlay._layout_signature(views, snapshot)
 
-        overlay._render_detail_rows.assert_not_called()
+        self.assertNotEqual(collapsed, expanded)
 
-    def test_detail_window_closes_when_game_closes(self) -> None:
+    def test_detail_filter_narrows_rows_and_signature(self) -> None:
         overlay = OverlayWindow.__new__(OverlayWindow)
-        detail = Mock()
-        detail.winfo_x.return_value = 123
-        detail.winfo_y.return_value = 234
-        overlay._local_settings = Mock()
-        overlay._detail_position_jobs = {}
-        overlay._detail_windows = {
-            ("Game", "OPEN", "Details"): (detail, Mock(), ())
-        }
-
-        overlay._sync_detail_windows("RetroArch is stopped")
-
-        detail.destroy.assert_called_once_with()
-        overlay._local_settings.save_detail_window_position.assert_called_once_with(
-            "Game|OPEN|Details", 123, 234
+        overlay._hide_caught = Mock()
+        overlay._hide_caught.get.return_value = False
+        overlay._expanded_actions = {("Game", "Section", "OPEN")}
+        overlay._detail_filters = {}
+        rows = (PanelRow("Treecko · Route 102"), PanelRow("Marill · Route 104"))
+        section = PanelSection(
+            "Section",
+            (PanelRow("Row"),),
+            actions=(PanelAction("OPEN", "Details", rows),),
         )
-        self.assertEqual(overlay._detail_windows, {})
+        snapshot = OverlaySnapshot("Game", "Route", (section,))
+        view = (section, section.rows, 0, ("Game", "Section"))
+
+        unfiltered = overlay._flat_view_rows(view, snapshot)
+        overlay._detail_filters[("Game", "Section", "OPEN")] = "marill"
+        filtered = overlay._flat_view_rows(view, snapshot)
+
+        self.assertEqual(
+            [row.text for row in unfiltered],
+            ["Row", "Treecko · Route 102", "Marill · Route 104"],
+        )
+        self.assertEqual([row.text for row in filtered], ["Row", "Marill · Route 104"])
 
 
 class StableLayoutTests(unittest.TestCase):
@@ -517,47 +625,23 @@ class StableLayoutTests(unittest.TestCase):
 
         self.assertEqual(first_signature, second_signature)
 
-    def test_detail_window_stays_open_during_same_game_battle_snapshot(self) -> None:
+    def test_expanded_action_from_one_game_does_not_leak_into_another(self) -> None:
         overlay = OverlayWindow.__new__(OverlayWindow)
-        detail = Mock()
-        body = Mock()
-        key = ("Emerald", "OPEN POC DETAILS", "Professor Oak Challenge")
-        overlay._detail_windows = {key: (detail, body, ())}
-        overlay._render_detail_rows = Mock()
-        battle = OverlaySnapshot(
-            "Emerald",
-            "Battle · Route 102",
-            (PanelSection("Battle", (PanelRow("Wild Pokémon"),)),),
+        overlay._hide_caught = Mock()
+        overlay._hide_caught.get.return_value = False
+        overlay._expanded_actions = {("Emerald", "Section", "OPEN")}
+        overlay._detail_filters = {}
+        section = PanelSection(
+            "Section",
+            (PanelRow("Row"),),
+            actions=(PanelAction("OPEN", "Details", (PanelRow("Detail"),)),),
         )
+        other_game = OverlaySnapshot("Other Game", "Area", (section,))
+        view = (section, section.rows, 0, ("Other Game", "Section"))
 
-        overlay._sync_detail_windows(battle)
+        rows = overlay._flat_view_rows(view, other_game)
 
-        detail.destroy.assert_not_called()
-        overlay._render_detail_rows.assert_not_called()
-        self.assertEqual(overlay._detail_windows, {key: (detail, body, ())})
-
-    def test_detail_window_closes_instead_of_crossing_to_another_game(self) -> None:
-        overlay = OverlayWindow.__new__(OverlayWindow)
-        detail = Mock()
-        overlay._detail_windows = {
-            ("Emerald", "OPEN", "Details"): (detail, Mock(), ())
-        }
-        other_game = OverlaySnapshot(
-            "Other Game",
-            "Area",
-            (
-                PanelSection(
-                    "Section",
-                    (),
-                    actions=(PanelAction("OPEN", "Details", (PanelRow("Other"),)),),
-                ),
-            ),
-        )
-
-        overlay._sync_detail_windows(other_game)
-
-        detail.destroy.assert_called_once_with()
-        self.assertEqual(overlay._detail_windows, {})
+        self.assertEqual([row.text for row in rows], ["Row"])
 
 
 class MapProjectionTests(unittest.TestCase):

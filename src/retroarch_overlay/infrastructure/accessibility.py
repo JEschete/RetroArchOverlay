@@ -17,6 +17,22 @@ def windows_high_contrast_enabled() -> bool:
         return False
 
 
+def windows_dark_mode_enabled() -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+        ) as key:
+            value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+        return not int(value)
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 def contrast_ratio(first: str, second: str) -> float:
     first_luminance = _relative_luminance(first)
     second_luminance = _relative_luminance(second)

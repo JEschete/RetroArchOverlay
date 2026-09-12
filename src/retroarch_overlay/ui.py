@@ -1,4 +1,5 @@
 import logging
+import os
 import tkinter as tk
 import time
 import webbrowser
@@ -10,7 +11,10 @@ from PIL import Image, ImageChops, ImageTk
 from .app.controller import OverlayController, OverlayDiagnostic, SnapshotCadence
 from .adapters.base import AdapterRegistry
 from .core.layout import sections_for_role
-from .infrastructure.accessibility import windows_high_contrast_enabled
+from .infrastructure.accessibility import (
+    windows_dark_mode_enabled,
+    windows_high_contrast_enabled,
+)
 from .infrastructure.logging_config import UIHangWatchdog
 from .models import LayoutProfile, MapDocument, MapLayer, MapOverlay, MapPosition, MapRegion, MapWaypoint, OverlaySnapshot, PanelAction, PanelRow, PanelSection, ScreenRect
 from .local_settings import LocalPluginSettings
@@ -20,6 +24,99 @@ from .retroarch import RetroArchClient
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+THEME_PALETTES: dict[str, dict[str, str]] = {
+    "light": {
+        "background": "#f4f1e8",
+        "surface": "#e6e1d4",
+        "foreground": "#20251f",
+        "muted": "#687064",
+        "accent": "#bb3e2f",
+        "divider": "#cbc8bd",
+        "alert_background": "#ffe9e5",
+        "alert_foreground": "#9d1717",
+        "header_background": "#20251f",
+        "header_foreground": "#ffffff",
+        "success": "#27824a",
+        "warning": "#a86e14",
+        "danger": "#b3261e",
+        "track": "#d8d4c8",
+    },
+    "dark": {
+        "background": "#191d1a",
+        "surface": "#242923",
+        "foreground": "#e6e4dc",
+        "muted": "#9aa294",
+        "accent": "#e0705e",
+        "divider": "#3a4038",
+        "alert_background": "#3c211d",
+        "alert_foreground": "#ff9c8a",
+        "header_background": "#10130f",
+        "header_foreground": "#f2f0e8",
+        "success": "#63c78a",
+        "warning": "#e0ab4e",
+        "danger": "#ef6e64",
+        "track": "#333831",
+    },
+    "high-contrast": {
+        "background": "#ffffff",
+        "surface": "#ffffff",
+        "foreground": "#000000",
+        "muted": "#333333",
+        "accent": "#0046b8",
+        "divider": "#000000",
+        "alert_background": "#ffffff",
+        "alert_foreground": "#a00000",
+        "header_background": "#000000",
+        "header_foreground": "#ffffff",
+        "success": "#00600f",
+        "warning": "#7a4f00",
+        "danger": "#a00000",
+        "track": "#bbbbbb",
+    },
+}
+
+THEME_CHOICES = ("auto", "light", "dark", "high-contrast")
+
+# "all" first and selected by default: the rail shows everything unless the
+# user deliberately narrows it.
+ROLE_TABS = ("all", "area", "party", "goals")
+
+# What a see-through rail rises to while the pointer is over it.
+HOVER_OPACITY = 0.96
+
+
+def resolve_theme(preference: str) -> str:
+    """Map a stored theme preference onto a concrete palette name."""
+    if preference in THEME_PALETTES:
+        return preference
+    if windows_high_contrast_enabled():
+        return "high-contrast"
+    return "dark" if windows_dark_mode_enabled() else "light"
+
+
+def progress_bar_color(
+    fraction: float, palette: dict[str, str], explicit: str = ""
+) -> str:
+    """HP-style semantics when the row does not pick its own bar color."""
+    if explicit:
+        return palette.get(explicit, explicit)
+    if fraction > 0.5:
+        return palette["success"]
+    if fraction > 0.2:
+        return palette["warning"]
+    return palette["danger"]
+
+
+def filter_detail_rows(
+    rows: tuple[PanelRow, ...], needle: str
+) -> tuple[PanelRow, ...]:
+    """Case-insensitive substring filter used by the inline detail search box."""
+    needle = needle.strip().casefold()
+    if not needle:
+        return rows
+    return tuple(row for row in rows if needle in row.text.casefold())
 
 
 def clamp_overlay_size(
@@ -627,6 +724,17 @@ class CoordinateMapWindow:
         self._redraw()
         if self._on_view_change is not None:
             self._on_view_change()
+
+    def view_state(self) -> dict[str, object]:
+        return {
+            "layer": self.mode.get(),
+            "overlays": {
+                kind: bool(variable.get())
+                for kind, variable in self.waypoint_visibility.items()
+            },
+            "hide_completed": bool(self.hide_completed_waypoints.get()),
+            "opacity": round(clamp_opacity(self.opacity.get()), 2),
+        }
 
     def view_state(self) -> dict[str, object]:
         return {
@@ -1553,6 +1661,220 @@ class CoordinateMapWindow:
             start += self.PATH_CHUNK_POINTS - 1
 
 
+class _RowView:
+    """A structured panel row whose values update in place between renders.
+
+    The widget structure (icon, chip count, progress bar, emphasis) is part of
+    the render signature; only texts, colors and bar fractions change here, so
+    steady-state updates never rebuild widgets and never flicker.
+    """
+
+    def __init__(
+        self,
+        window: "OverlayWindow",
+        parent: tk.Misc,
+        row: PanelRow,
+        background: str,
+        wraplength: int,
+    ) -> None:
+        self.window = window
+        self.background = background
+        self.frame = tk.Frame(parent, background=background)
+        self.frame.pack(fill="x", pady=1)
+        top = tk.Frame(self.frame, background=background)
+        top.pack(fill="x")
+        self.indicator = tk.Label(
+            top, text="", width=2, background=background,
+            foreground=window.MUTED, font=window._body_font, anchor="w",
+        )
+        self.indicator.pack(side="left")
+        self.icon_label: tk.Label | None = None
+        if row.icon:
+            self.icon_label = tk.Label(top, background=background)
+            self.icon_label.pack(side="left", padx=(0, 4))
+        self.chip_labels: list[tk.Label] = []
+        for _ in row.chips:
+            chip = tk.Label(
+                top, text="", font=window._chip_font, padx=5, pady=1,
+            )
+            chip.pack(side="right", padx=(3, 0))
+            self.chip_labels.append(chip)
+        # side="right" packs the first chip at the far edge; reverse so
+        # chip_labels reads left-to-right like row.chips does.
+        self.chip_labels.reverse()
+        self.text_label = tk.Label(
+            top, text="", background=background, foreground=window.FOREGROUND,
+            font=window._body_font, anchor="w", justify="left",
+            wraplength=wraplength,
+        )
+        self.text_label.pack(side="left", fill="x", expand=True)
+        window._row_labels.append(self.text_label)
+        self.track: tk.Frame | None = None
+        self.fill: tk.Frame | None = None
+        if row.progress is not None:
+            self.track = tk.Frame(
+                self.frame, background=window.TRACK, height=3
+            )
+            self.track.pack(fill="x", padx=(22, 4), pady=(1, 2))
+            self.track.pack_propagate(False)
+            self.fill = tk.Frame(self.track, background=window.SUCCESS)
+            self.fill.place(x=0, y=0, relheight=1.0, relwidth=0.0)
+        window._bind_row_tooltip(self.text_label, row.tooltip)
+        self.update(row)
+
+    def update(self, row: PanelRow) -> None:
+        window = self.window
+        indicator = "●" if row.caught else "○" if row.caught is False else ""
+        self.indicator.configure(
+            text=indicator,
+            foreground=window.SUCCESS if row.caught else window.MUTED,
+        )
+        if self.icon_label is not None:
+            window._apply_icon(self.icon_label, row.icon, self.background)
+        emphasis_colors = {
+            "heading": window.ACCENT,
+            "muted": window.MUTED,
+            "success": window.SUCCESS,
+            "warning": window.WARNING,
+            "danger": window.DANGER,
+        }
+        heading = row.emphasis == "heading" or (
+            not row.emphasis and row.caught is None and row.text.isupper() and len(row.text) > 3
+        )
+        self.text_label.configure(
+            text=row.text,
+            foreground=(
+                window.ACCENT
+                if heading
+                else emphasis_colors.get(row.emphasis, window.FOREGROUND)
+            ),
+            font=window._section_font if heading else window._body_font,
+        )
+        window._update_row_tooltip(self.text_label, row.tooltip)
+        for label, chip in zip(self.chip_labels, row.chips):
+            label.configure(
+                text=chip.text,
+                background=chip.background,
+                foreground=chip.foreground,
+            )
+        if self.fill is not None and row.progress is not None:
+            fraction = max(0.0, min(1.0, row.progress))
+            self.fill.place_configure(relwidth=fraction)
+            self.fill.configure(
+                background=progress_bar_color(
+                    fraction, window._palette, row.progress_color
+                )
+            )
+
+    @staticmethod
+    def signature(row: PanelRow) -> tuple[object, ...]:
+        return (
+            "row",
+            bool(row.icon),
+            len(row.chips),
+            row.progress is not None,
+        )
+
+
+class _DetailPokemonView:
+    """Inline detail header row in the `Name | metadata` style."""
+
+    def __init__(
+        self,
+        window: "OverlayWindow",
+        parent: tk.Misc,
+        row: PanelRow,
+        wraplength: int,
+    ) -> None:
+        self.window = window
+        self.frame = tk.Frame(parent, background=window.SURFACE, padx=10, pady=6)
+        self.frame.pack(fill="x", pady=(6, 1))
+        self.name_label = tk.Label(
+            self.frame, background=window.SURFACE, foreground=window.ACCENT,
+            font=window._section_font, anchor="w",
+        )
+        self.name_label.pack(fill="x")
+        self.metadata_label = tk.Label(
+            self.frame, background=window.SURFACE, foreground=window.MUTED,
+            font=window._body_font, anchor="w", justify="left",
+            wraplength=max(160, wraplength - 20),
+        )
+        window._row_labels.append(self.metadata_label)
+        self.update(row)
+
+    def update(self, row: PanelRow) -> None:
+        name, _, metadata = row.text.partition(" | ")
+        self.name_label.configure(text=name)
+        if metadata:
+            self.metadata_label.configure(text=metadata)
+            if not self.metadata_label.winfo_manager():
+                self.metadata_label.pack(fill="x", pady=(2, 0))
+        elif self.metadata_label.winfo_manager():
+            self.metadata_label.pack_forget()
+
+    @staticmethod
+    def signature(row: PanelRow) -> tuple[object, ...]:
+        return ("pokemon",)
+
+
+class _DetailGridView:
+    """Inline `Label | v1 | v2 | ...` detail row rendered as an aligned grid."""
+
+    def __init__(
+        self,
+        window: "OverlayWindow",
+        parent: tk.Misc,
+        row: PanelRow,
+        role: str,
+        wraplength: int,
+    ) -> None:
+        self.window = window
+        self.role = role
+        values = row.text.partition(" | ")[2].split(" | ")
+        self.frame = tk.Frame(parent, background=window.BACKGROUND, padx=14, pady=2)
+        self.frame.pack(fill="x", pady=(0, 6) if role == "moves" else 0)
+        self.frame.grid_columnconfigure(1, weight=1)
+        self.category_label = tk.Label(
+            self.frame, width=9, background=window.BACKGROUND,
+            foreground=window.ACCENT if role in {"stats", "moves"} else window.MUTED,
+            font=("Segoe UI Semibold", 8), anchor="nw", justify="left",
+        )
+        self.category_label.grid(row=0, column=0, sticky="nw")
+        values_frame = tk.Frame(self.frame, background=window.BACKGROUND)
+        values_frame.grid(row=0, column=1, sticky="ew")
+        columns = 2 if role == "moves" else 3
+        value_wraplength = max(80, (wraplength - 110) // columns)
+        for column in range(columns):
+            values_frame.grid_columnconfigure(column, weight=1, uniform=role)
+        self.value_labels: list[tk.Label] = []
+        for index in range(len(values)):
+            label = tk.Label(
+                values_frame, background=window.BACKGROUND,
+                foreground=window.MUTED if role == "stat_exp" else window.FOREGROUND,
+                font=window._mono_font, anchor="w", justify="left",
+                wraplength=value_wraplength,
+            )
+            label.grid(
+                row=index // columns,
+                column=index % columns,
+                sticky="w",
+                padx=(0, 10),
+                pady=(0, 2),
+            )
+            self.value_labels.append(label)
+        self.update(row)
+
+    def update(self, row: PanelRow) -> None:
+        label, _, values = row.text.partition(" | ")
+        self.category_label.configure(text=label.upper())
+        for value_label, value in zip(self.value_labels, values.split(" | ")):
+            value_label.configure(text=value)
+
+    @staticmethod
+    def signature(row: PanelRow, role: str) -> tuple[object, ...]:
+        return ("grid", role, len(row.text.partition(" | ")[2].split(" | ")))
+
+
 class OverlayWindow:
     WIDTH = 320
     MIN_WIDTH = 280
@@ -1565,12 +1887,53 @@ class OverlayWindow:
     DIVIDER = "#cbc8bd"
     ALERT_BACKGROUND = "#ffe9e5"
     ALERT_FOREGROUND = "#9d1717"
+    SURFACE = "#e6e1d4"
+    HEADER_BACKGROUND = "#20251f"
+    HEADER_FOREGROUND = "#ffffff"
+    SUCCESS = "#27824a"
+    WARNING = "#a86e14"
+    DANGER = "#b3261e"
+    TRACK = "#d8d4c8"
+
+    def _set_palette(self, name: str) -> None:
+        palette = THEME_PALETTES.get(name, THEME_PALETTES["light"])
+        self._theme_name = name
+        self._palette = palette
+        self.BACKGROUND = palette["background"]
+        self.FOREGROUND = palette["foreground"]
+        self.MUTED = palette["muted"]
+        self.ACCENT = palette["accent"]
+        self.DIVIDER = palette["divider"]
+        self.ALERT_BACKGROUND = palette["alert_background"]
+        self.ALERT_FOREGROUND = palette["alert_foreground"]
+        self.SURFACE = palette["surface"]
+        self.HEADER_BACKGROUND = palette["header_background"]
+        self.HEADER_FOREGROUND = palette["header_foreground"]
+        self.SUCCESS = palette["success"]
+        self.WARNING = palette["warning"]
+        self.DANGER = palette["danger"]
+        self.TRACK = palette["track"]
+        self._high_contrast = name == "high-contrast"
+
+    def _hover_opacity(self) -> float:
+        return max(self._idle_opacity, HOVER_OPACITY)
+
+    def _set_opacity(self, opacity: float) -> None:
+        self._idle_opacity = clamp_opacity(opacity)
+        self.root.attributes("-alpha", self._idle_opacity)
+
+    def _role_hotkey(self, event: tk.Event, role: str) -> None:
+        # Number keys switch tabs unless the user is typing in a filter box.
+        if isinstance(getattr(event, "widget", None), tk.Entry):
+            return
+        if self._role_tabs_supported():
+            self._select_role(role)
 
     def __init__(
         self,
         client: RetroArchClient,
         registry: AdapterRegistry,
-        opacity: float = 0.72,
+        opacity: float = 1.0,
         local_settings: LocalPluginSettings | None = None,
         controller: OverlayController | None = None,
         hang_watchdog: UIHangWatchdog | None = None,
@@ -1579,6 +1942,11 @@ class OverlayWindow:
             raise ValueError("Opacity must be between 0.3 and 1.0")
         self._controller = controller or OverlayController(client, registry)
         self._local_settings = local_settings
+        # A saved preference wins over the command-line default.
+        if local_settings is not None:
+            stored_opacity = local_settings.overlay_opacity()
+            if stored_opacity is not None:
+                opacity = stored_opacity
         self._hang_watchdog = hang_watchdog or (
             UIHangWatchdog(
                 local_settings.path.parent
@@ -1589,22 +1957,10 @@ class OverlayWindow:
             else None
         )
         self._heartbeat_job: str | None = None
-        high_contrast = (
-            local_settings.high_contrast_override()
-            if local_settings is not None
-            else None
+        self._theme_preference = (
+            local_settings.theme() if local_settings is not None else "auto"
         )
-        if high_contrast is None:
-            high_contrast = windows_high_contrast_enabled()
-        self._high_contrast = high_contrast
-        if high_contrast:
-            self.BACKGROUND = "#ffffff"
-            self.FOREGROUND = "#000000"
-            self.MUTED = "#333333"
-            self.ACCENT = "#0046b8"
-            self.DIVIDER = "#000000"
-            self.ALERT_BACKGROUND = "#ffffff"
-            self.ALERT_FOREGROUND = "#a00000"
+        self._set_palette(resolve_theme(self._theme_preference))
         profile = (
             local_settings.layout_profile()
             if local_settings is not None
@@ -1662,12 +2018,23 @@ class OverlayWindow:
         self._main_geometry_job: str | None = None
         self._collapsed = False
         self._expanded_sections: set[tuple[str, str]] = set()
+        self._expanded_actions: set[tuple[str, str, str]] = set()
+        self._detail_filters: dict[tuple[str, str, str], str] = {}
+        self._filter_entries: dict[tuple[str, str, str], tk.Entry] = {}
         self._hide_caught = tk.BooleanVar(value=False)
-        self._active_role = tk.StringVar(value="area")
+        self._active_role = tk.StringVar(value="all")
+        self._role_game = ""
         self._role_buttons: dict[str, tk.Button] = {}
         self._rendered_layout: tuple[object, ...] | None = None
         self._section_labels: list[tk.Label] = []
         self._row_labels: list[tk.Label] = []
+        self._row_views: list[_RowView] = []
+        self._icon_cache: dict[str, tuple[float, ImageTk.PhotoImage]] = {}
+        self._seen_alert_keys: dict[str, set[tuple[str, str]]] = {}
+        self._toast_queue: list[tuple[str, str]] = []
+        self._toast_window: tk.Toplevel | None = None
+        self._toast_job: str | None = None
+        self._now_text = ""
         self._row_tooltips: dict[tk.Label, str] = {}
         self._tooltip_window: tk.Toplevel | None = None
         self._tooltip_label: tk.Label | None = None
@@ -1683,20 +2050,31 @@ class OverlayWindow:
         self._secondary_body: tk.Frame | None = None
         self._secondary_signature: tuple[object, ...] | None = None
         self._layout_dialog: LayoutSettingsDialog | None = None
-        self._detail_windows: dict[
-            tuple[str, str, str], tuple[tk.Toplevel, tk.Frame, tuple[PanelRow, ...]]
-        ] = {}
-        self._detail_position_jobs: dict[tuple[str, str, str], str] = {}
-        self._title_font = tkfont.Font(family="Georgia", size=18, weight="bold")
+        self._title_font = tkfont.Font(family="Georgia", size=15, weight="bold")
         self._section_font = tkfont.Font(family="Segoe UI Semibold", size=10)
-        self._body_font = tkfont.Font(family="Consolas", size=10)
+        self._body_font = tkfont.Font(family="Segoe UI", size=10)
+        self._mono_font = tkfont.Font(family="Consolas", size=10)
+        self._chip_font = tkfont.Font(family="Segoe UI Semibold", size=7)
         self._build()
         self._configure_accessibility(self.root)
-        self.root.bind("<Enter>", lambda _: self.root.attributes("-alpha", 0.96))
-        self.root.bind("<Leave>", lambda _: self.root.attributes("-alpha", self._idle_opacity))
+        # Hovering lifts a see-through rail toward legibility, but must never
+        # make an opaque one transparent.
+        self.root.bind(
+            "<Enter>",
+            lambda _: self.root.attributes("-alpha", self._hover_opacity()),
+        )
+        self.root.bind(
+            "<Leave>",
+            lambda _: self.root.attributes("-alpha", self._idle_opacity),
+        )
         self.root.bind("<Escape>", lambda _: self._toggle_collapsed())
         self.root.bind("<Alt-m>", lambda _: self._show_map())
         self.root.bind("<Alt-n>", lambda _: self._show_minimap())
+        for index, role in enumerate(ROLE_TABS, start=1):
+            self.root.bind(
+                f"<Key-{index}>",
+                lambda event, role=role: self._role_hotkey(event, role),
+            )
         self.root.bind("<Prior>", lambda _: self.canvas.yview_scroll(-1, "pages"))
         self.root.bind("<Next>", lambda _: self.canvas.yview_scroll(1, "pages"))
         self.root.bind("<MouseWheel>", self._scroll_main_panel)
@@ -1717,14 +2095,16 @@ class OverlayWindow:
             self._configure_accessibility(child)
 
     def _build(self) -> None:
-        self.header = tk.Frame(self.root, background=self.FOREGROUND, padx=14, pady=9)
+        self.header = tk.Frame(
+            self.root, background=self.HEADER_BACKGROUND, padx=14, pady=8
+        )
         self.header.pack(fill="x")
-        close_button = tk.Button(
+        self.close_button = tk.Button(
             self.header,
             text="X",
             command=self.close,
-            background=self.FOREGROUND,
-            foreground="#ffffff",
+            background=self.HEADER_BACKGROUND,
+            foreground=self.HEADER_FOREGROUND,
             activebackground=self.ACCENT,
             activeforeground="#ffffff",
             borderwidth=0,
@@ -1732,33 +2112,38 @@ class OverlayWindow:
             padx=6,
             pady=2,
         )
-        close_button.pack(side="right", anchor="n")
-        tk.Button(
+        self.close_button.pack(side="right", anchor="n")
+        self.settings_button = tk.Button(
             self.header,
             text="⚙",
             command=self._show_layout_settings,
-            background=self.FOREGROUND,
-            foreground="#ffffff",
+            background=self.HEADER_BACKGROUND,
+            foreground=self.HEADER_FOREGROUND,
             activebackground=self.ACCENT,
             activeforeground="#ffffff",
             borderwidth=0,
             font=("Segoe UI Symbol", 11),
             padx=6,
             pady=1,
-        ).pack(side="right", anchor="n", padx=(0, 4))
-        title_block = tk.Frame(self.header, background=self.FOREGROUND)
-        title_block.pack(side="left", fill="x", expand=True)
+        )
+        self.settings_button.pack(side="right", anchor="n", padx=(0, 4))
+        self.title_block = tk.Frame(self.header, background=self.HEADER_BACKGROUND)
+        self.title_block.pack(side="left", fill="x", expand=True)
         self.game_label = tk.Label(
-            title_block, text="RETROARCH OVERLAY", background=self.FOREGROUND,
-            foreground="#ffffff", font=self._section_font, anchor="w",
+            self.title_block, text="RETROARCH OVERLAY",
+            background=self.HEADER_BACKGROUND,
+            foreground=self.HEADER_FOREGROUND, font=("Segoe UI Semibold", 8),
+            anchor="w",
         )
         self.game_label.pack(fill="x")
         self.location_label = tk.Label(
-            title_block, text="Waiting for RetroArch", background=self.FOREGROUND,
-            foreground="#ffffff", font=self._title_font, anchor="w", wraplength=255,
+            self.title_block, text="Waiting for RetroArch",
+            background=self.HEADER_BACKGROUND,
+            foreground=self.HEADER_FOREGROUND, font=self._title_font, anchor="w",
+            wraplength=255,
         )
         self.location_label.pack(fill="x", pady=(1, 0))
-        for widget in (self.header, title_block, self.game_label, self.location_label):
+        for widget in (self.header, self.title_block, self.game_label, self.location_label):
             widget.bind("<Double-Button-1>", lambda _: self._toggle_collapsed())
 
         self.status_bar = tk.Frame(self.root, background=self.BACKGROUND)
@@ -1768,8 +2153,24 @@ class OverlayWindow:
             foreground=self.MUTED, font=("Segoe UI", 8), anchor="w", padx=14, pady=6,
         )
         self.status_label.pack(side="left", fill="x", expand=True)
-        self.role_tabs = tk.Frame(self.root, background="#e6e1d4", padx=10, pady=6)
-        for role in ("area", "party", "goals"):
+        # Always-visible strip carrying the single most urgent fact, so alerts
+        # do not depend on the scroll position of the rail below.
+        self.now_strip = tk.Frame(
+            self.root, background=self.ALERT_BACKGROUND, padx=14, pady=5
+        )
+        self.now_label = tk.Label(
+            self.now_strip,
+            text="",
+            background=self.ALERT_BACKGROUND,
+            foreground=self.ALERT_FOREGROUND,
+            font=("Segoe UI Semibold", 9),
+            anchor="w",
+            justify="left",
+            wraplength=self.WIDTH - 28,
+        )
+        self.now_label.pack(fill="x")
+        self.role_tabs = tk.Frame(self.root, background=self.SURFACE, padx=10, pady=6)
+        for role in ROLE_TABS:
             button = tk.Button(
                 self.role_tabs,
                 text=role.upper(),
@@ -1784,31 +2185,35 @@ class OverlayWindow:
             button.pack(side="left", expand=True, fill="x", padx=2)
             self._role_buttons[role] = button
         self._update_role_tabs()
-        self.map_controls = tk.Frame(self.root, background="#e6e1d4", padx=14, pady=7)
-        tk.Label(
+        self.map_controls = tk.Frame(self.root, background=self.SURFACE, padx=14, pady=7)
+        self.map_controls_label = tk.Label(
             self.map_controls,
             text="MAPS",
-            background="#e6e1d4",
+            background=self.SURFACE,
             foreground=self.MUTED,
             font=self._section_font,
-        ).pack(side="left", padx=(0, 10))
+        )
+        self.map_controls_label.pack(side="left", padx=(0, 10))
+        self.map_buttons = []
         for text, command in (
             ("MAP", self._show_map),
             ("MINIMAP", self._show_minimap),
         ):
-            tk.Button(
+            button = tk.Button(
                 self.map_controls,
                 text=text,
                 command=command,
-                background="#e6e1d4",
+                background=self.SURFACE,
                 foreground=self.ACCENT,
-                activebackground="#e6e1d4",
+                activebackground=self.SURFACE,
                 activeforeground=self.FOREGROUND,
                 borderwidth=0,
                 font=("Segoe UI Semibold", 8),
                 padx=8,
                 pady=2,
-            ).pack(side="left", padx=(0, 4))
+            )
+            button.pack(side="left", padx=(0, 4))
+            self.map_buttons.append(button)
         self.hide_caught_toggle = tk.Checkbutton(
             self.status_bar,
             text="Hide completed",
@@ -1847,6 +2252,7 @@ class OverlayWindow:
             self._hang_watchdog.heartbeat("Tk mainloop starting")
         self._controller.start()
         self.root.after(100, self._drain_results)
+        self.root.after(500, self._refresh_layout)
         self._heartbeat_job = self.root.after(250, self._ui_heartbeat)
         try:
             self.root.mainloop()
@@ -1876,11 +2282,15 @@ class OverlayWindow:
             self._tooltip_window.destroy()
             self._tooltip_window = None
             self._tooltip_label = None
-        for key, (window, _, _) in self._detail_windows.items():
-            self._save_detail_window_position(key, window)
-            window.destroy()
-        self._detail_windows.clear()
-        self._detail_position_jobs.clear()
+        if self._toast_job is not None:
+            try:
+                self.root.after_cancel(self._toast_job)
+            except tk.TclError:
+                pass
+            self._toast_job = None
+        if self._toast_window is not None:
+            self._toast_window.destroy()
+            self._toast_window = None
         self.root.destroy()
 
     def _bind_row_tooltip(self, label: tk.Label, tooltip: str) -> None:
@@ -2034,110 +2444,6 @@ class OverlayWindow:
         self._map_window = None
         self._minimap_window = None
 
-    def _show_detail(self, action: PanelAction) -> None:
-        game = self._last_result.game if isinstance(self._last_result, OverlaySnapshot) else ""
-        key = (game, action.label, action.title)
-        existing = self._detail_windows.get(key)
-        if existing is not None:
-            window, _, _ = existing
-            if window.state() == "withdrawn":
-                window.deiconify()
-                window.lift()
-            else:
-                window.withdraw()
-            return
-        window = tk.Toplevel(self.root)
-        window.title(action.title)
-        window.attributes("-topmost", True)
-        window.configure(background=self.BACKGROUND)
-        compact_layout = action.compact
-        if compact_layout:
-            detail_width = self.WIDTH
-            detail_height = 180
-        else:
-            detail_width = min(720, max(520, int(window.winfo_screenwidth() * 0.38)))
-            detail_height = min(720, max(560, int(window.winfo_screenheight() * 0.72)))
-        saved_geometry = self._window_geometry(
-            f"detail|{self._detail_position_key(key)}"
-        )
-        autosize_detail = saved_geometry is None
-        if saved_geometry is not None:
-            detail_width = saved_geometry.width
-            detail_height = saved_geometry.height
-            placement = f"{saved_geometry.left:+d}{saved_geometry.top:+d}"
-        else:
-            position = self._detail_window_position(key)
-            placement = (
-                f"{position[0]:+d}{position[1]:+d}"
-                if position is not None
-                else ""
-            )
-        window.geometry(f"{detail_width}x{detail_height}{placement}")
-        window.bind(
-            "<Configure>",
-            lambda event, key=key, window=window: self._schedule_detail_position_save(
-                key, window
-            )
-            if event.widget is window
-            else None,
-        )
-        window.protocol("WM_DELETE_WINDOW", window.withdraw)
-        header = tk.Frame(window, background=self.FOREGROUND, padx=14, pady=10)
-        header.pack(fill="x")
-        tk.Label(
-            header,
-            text=action.title.upper(),
-            background=self.FOREGROUND,
-            foreground="#ffffff",
-            font=self._section_font,
-            anchor="w",
-            justify="left",
-            wraplength=detail_width - 52,
-        ).pack(side="left", fill="x", expand=True)
-        tk.Button(
-            header,
-            text="X",
-            command=window.withdraw,
-            background=self.FOREGROUND,
-            foreground="#ffffff",
-            activebackground=self.ACCENT,
-            activeforeground="#ffffff",
-            borderwidth=0,
-            font=("Segoe UI Semibold", 9),
-            padx=6,
-            pady=2,
-        ).pack(side="right")
-        canvas = tk.Canvas(window, background=self.BACKGROUND, highlightthickness=0)
-        scrollbar = tk.Scrollbar(window, orient="vertical", command=canvas.yview)
-        body = tk.Frame(canvas, background=self.BACKGROUND)
-        setattr(body, "detail_wraplength", detail_width - 72)
-        setattr(body, "detail_kind", "party" if action.label == "PARTY DETAILS" else "generic")
-        if autosize_detail:
-            setattr(
-                body,
-                "detail_autosize",
-                (
-                    window,
-                    header,
-                    scrollbar,
-                    detail_width,
-                    260 if compact_layout else 320,
-                    detail_height,
-                ),
-            )
-        rows = self._detail_rows(action.rows)
-        self._detail_windows[key] = (window, body, rows)
-        body.bind(
-            "<Configure>",
-            lambda _: self._sync_detail_scrollbar(canvas, scrollbar),
-        )
-        canvas_window = canvas.create_window((0, 0), window=body, anchor="nw")
-        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(canvas_window, width=event.width))
-        canvas.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-        self._render_detail_rows(body, rows)
-
     def _detail_rows(
         self,
         rows: tuple[PanelRow, ...],
@@ -2152,228 +2458,155 @@ class OverlayWindow:
             return tuple(row for row in rows if row.caught is not True)
         return rows
 
-    @staticmethod
-    def _sync_detail_scrollbar(canvas: tk.Canvas, scrollbar: tk.Scrollbar) -> None:
-        canvas.configure(scrollregion=canvas.bbox("all"))
-        first, last = canvas.yview()
-        if first <= 0 and last >= 1:
-            scrollbar.pack_forget()
-        elif not scrollbar.winfo_manager():
-            scrollbar.pack(side="right", fill="y")
+    FILTERABLE_DETAIL_ROWS = 13
 
-    def _render_detail_rows(
-        self, body: tk.Frame, rows: tuple[PanelRow, ...]
-    ) -> None:
-        for child in body.winfo_children():
-            child.destroy()
-        party_detail = getattr(body, "detail_kind", "generic") == "party"
-        for row in rows:
-            role = party_detail_row_role(row.text) if party_detail else "generic"
-            if role == "pokemon":
-                if body.winfo_children():
-                    tk.Frame(
-                        body,
-                        background=self.DIVIDER,
-                        height=1,
-                    ).pack(fill="x", padx=14, pady=(8, 0))
-                row_frame = tk.Frame(
-                    body,
-                    background="#e6e1d4",
-                    padx=16,
-                    pady=9,
-                )
-                row_frame.pack(fill="x", padx=10, pady=(0, 2))
-                name, _, metadata = row.text.partition(" | ")
-                tk.Label(
-                    row_frame,
-                    text=name,
-                    background="#e6e1d4",
-                    foreground=self.ACCENT,
-                    font=self._section_font,
-                    anchor="w",
-                ).pack(fill="x")
-                if metadata:
-                    tk.Label(
-                        row_frame,
-                        text=metadata,
-                        background="#e6e1d4",
-                        foreground=self.MUTED,
-                        font=self._body_font,
-                        anchor="w",
-                        justify="left",
-                        wraplength=max(
-                            180,
-                            getattr(body, "detail_wraplength", 440) - 24,
-                        ),
-                    ).pack(fill="x", pady=(3, 0))
-                continue
-            if role != "generic":
-                row_frame = tk.Frame(
-                    body,
-                    background=self.BACKGROUND,
-                    padx=24,
-                    pady=3,
-                )
-                row_frame.pack(
-                    fill="x",
-                    pady=(0, 8) if role == "moves" else 0,
-                )
-                row_frame.grid_columnconfigure(1, weight=1)
-                label, _, values = row.text.partition(" | ")
-                tk.Label(
-                    row_frame,
-                    text=label.upper(),
-                    width=9,
-                    background=self.BACKGROUND,
-                    foreground=self.ACCENT if role in {"stats", "moves"} else self.MUTED,
-                    font=("Segoe UI Semibold", 8),
-                    anchor="nw",
-                    justify="left",
-                ).grid(row=0, column=0, sticky="nw")
-                values_frame = tk.Frame(
-                    row_frame,
-                    background=self.BACKGROUND,
-                )
-                values_frame.grid(row=0, column=1, sticky="ew")
-                columns = 2 if role == "moves" else 3
-                value_wraplength = max(
-                    92,
-                    (getattr(body, "detail_wraplength", 440) - 160) // columns,
-                )
-                for column in range(columns):
-                    values_frame.grid_columnconfigure(column, weight=1, uniform=role)
-                for index, value in enumerate(values.split(" | ")):
-                    tk.Label(
-                        values_frame,
-                        text=value,
-                        background=self.BACKGROUND,
-                        foreground=(
-                            self.MUTED if role == "stat_exp" else self.FOREGROUND
-                        ),
-                        font=self._body_font,
-                        anchor="w",
-                        justify="left",
-                        wraplength=value_wraplength,
-                    ).grid(
-                        row=index // columns,
-                        column=index % columns,
-                        sticky="w",
-                        padx=(0, 12),
-                        pady=(0, 2),
-                    )
-                continue
-            heading = row.caught is None and row.text.isupper()
-            row_frame = tk.Frame(
-                body,
-                background=self.BACKGROUND,
-                padx=14,
-                pady=(8 if heading else 2),
-            )
-            row_frame.pack(fill="x")
-            indicator = "●" if row.caught else "○" if row.caught is False else ""
-            indicator_color = "#27824a" if row.caught else self.MUTED
-            tk.Label(
-                row_frame,
-                text=indicator,
-                width=2,
-                background=self.BACKGROUND,
-                foreground=indicator_color,
-                font=self._body_font,
-                anchor="w",
-            ).pack(side="left")
-            tk.Label(
-                row_frame,
-                text=row.text,
-                background=self.BACKGROUND,
-                foreground=self.ACCENT if heading else self.FOREGROUND,
-                font=self._section_font if heading else self._body_font,
-                anchor="w",
-                justify="left",
-                wraplength=getattr(body, "detail_wraplength", 440),
-            ).pack(side="left", fill="x", expand=True)
-        autosize = getattr(body, "detail_autosize", None)
-        if autosize is not None:
-            window, header, scrollbar, width, minimum_height, height_cap = autosize
-            window.update_idletasks()
-            desired_height = max(
-                minimum_height,
-                header.winfo_reqheight() + body.winfo_reqheight() + 8,
-            )
-            maximum_height = min(
-                height_cap,
-                window.winfo_screenheight() - 2 * self.SCREEN_MARGIN,
-            )
-            window.geometry(f"{width}x{min(desired_height, maximum_height)}")
-            window.update_idletasks()
-            self._sync_detail_scrollbar(body.master, scrollbar)
+    def _toggle_action(self, key: tuple[str, str, str]) -> None:
+        if key in self._expanded_actions:
+            self._expanded_actions.remove(key)
+        else:
+            self._expanded_actions.add(key)
+        if isinstance(self._last_result, OverlaySnapshot):
+            snapshot = self._last_result
+            self._last_result = None
+            self._render(snapshot)
 
-    @staticmethod
-    def _detail_position_key(key: tuple[str, str, str]) -> str:
-        return "|".join(key)
-
-    def _detail_window_position(
-        self, key: tuple[str, str, str]
-    ) -> tuple[int, int] | None:
-        local_settings = getattr(self, "_local_settings", None)
-        if local_settings is None:
-            return None
-        return local_settings.detail_window_position(
-            self._detail_position_key(key)
-        )
-
-    def _schedule_detail_position_save(
-        self, key: tuple[str, str, str], window: tk.Toplevel
-    ) -> None:
-        previous = self._detail_position_jobs.pop(key, None)
-        if previous is not None:
-            self.root.after_cancel(previous)
-        self._detail_position_jobs[key] = self.root.after(
-            250, lambda: self._save_detail_window_position(key, window)
-        )
-
-    def _save_detail_window_position(
-        self, key: tuple[str, str, str], window: tk.Toplevel
-    ) -> None:
-        pending = getattr(self, "_detail_position_jobs", {}).pop(key, None)
-        if pending is not None:
-            self.root.after_cancel(pending)
-        local_settings = getattr(self, "_local_settings", None)
-        if local_settings is not None:
-            local_settings.save_detail_window_position(
-                self._detail_position_key(key), window.winfo_x(), window.winfo_y()
-            )
-            self._save_window_geometry(
-                f"detail|{self._detail_position_key(key)}", window
-            )
-
-    def _sync_detail_windows(self, result: OverlaySnapshot | Exception | str) -> None:
-        if not isinstance(result, OverlaySnapshot):
-            for key, (window, _, _) in self._detail_windows.items():
-                self._save_detail_window_position(key, window)
-                window.destroy()
-            self._detail_windows.clear()
+    def _set_detail_filter(self, key: tuple[str, str, str], text: str) -> None:
+        if self._detail_filters.get(key, "") == text:
             return
-        actions = {
-            (action.label, action.title): action
+        self._detail_filters[key] = text
+        if isinstance(self._last_result, OverlaySnapshot):
+            snapshot = self._last_result
+            self._last_result = None
+            self._render(snapshot)
+
+    def _load_icon(self, path: str) -> ImageTk.PhotoImage | None:
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            return None
+        cached = self._icon_cache.get(path)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+        try:
+            with Image.open(path) as source:
+                image = source.convert("RGBA")
+        except (OSError, ValueError):
+            return None
+        photo = ImageTk.PhotoImage(image)
+        self._icon_cache[path] = (mtime, photo)
+        return photo
+
+    def _apply_icon(self, label: tk.Label, path: str, background: str) -> None:
+        photo = self._load_icon(path) if path else None
+        if photo is None:
+            label.configure(image="", text="", background=background)
+            return
+        label.configure(image=photo, background=background)
+        # Tk drops images that lose their last Python reference.
+        label.image = photo
+
+    # --- transient alert toasts -------------------------------------------
+
+    def _queue_alert_toasts(self, result: OverlaySnapshot) -> None:
+        alerts = {
+            (result.game, section.title): section
             for section in result.sections
-            for action in section.actions
+            if section.alert
         }
-        for key, (window, body, current_rows) in tuple(self._detail_windows.items()):
-            game, label, title = key
-            if game != result.game:
-                self._save_detail_window_position(key, window)
-                window.destroy()
-                self._detail_windows.pop(key)
+        seen = self._seen_alert_keys.get(result.game)
+        if seen is None:
+            # First snapshot of this game: record without toasting the backlog.
+            self._seen_alert_keys[result.game] = set(alerts)
+            return
+        for key, section in alerts.items():
+            if key in seen:
                 continue
-            action = actions.get((label, title))
-            rows = (
-                self._detail_rows(action.rows, result)
-                if action is not None
-                else current_rows
-            )
-            if rows != current_rows:
-                self._render_detail_rows(body, rows)
-                self._detail_windows[key] = (window, body, rows)
+            seen.add(key)
+            first_row = section.rows[0].text if section.rows else ""
+            self._toast_queue.append((section.title, first_row))
+        if self._toast_queue and self._toast_job is None:
+            self._show_next_toast()
+
+    def _show_next_toast(self) -> None:
+        self._toast_job = None
+        if self._toast_window is not None:
+            self._toast_window.destroy()
+            self._toast_window = None
+        if not self._toast_queue:
+            return
+        title, detail = self._toast_queue.pop(0)
+        toast = tk.Toplevel(self.root)
+        toast.overrideredirect(True)
+        toast.attributes("-topmost", True)
+        toast.configure(background=self.ALERT_FOREGROUND)
+        body = tk.Frame(toast, background=self.ALERT_BACKGROUND, padx=12, pady=8)
+        body.pack(fill="both", expand=True, padx=1, pady=1)
+        tk.Label(
+            body, text=title.upper(), background=self.ALERT_BACKGROUND,
+            foreground=self.ALERT_FOREGROUND, font=("Segoe UI Semibold", 9),
+            anchor="w", justify="left", wraplength=280,
+        ).pack(fill="x")
+        if detail:
+            tk.Label(
+                body, text=detail, background=self.ALERT_BACKGROUND,
+                foreground=self.FOREGROUND, font=("Segoe UI", 9),
+                anchor="w", justify="left", wraplength=280,
+            ).pack(fill="x")
+        toast.update_idletasks()
+        x = self.root.winfo_x() + max(0, self.root.winfo_width() - toast.winfo_reqwidth() - 8)
+        y = max(4, self.root.winfo_y() - toast.winfo_reqheight() - 6)
+        toast.geometry(f"+{x}+{y}")
+        self._toast_window = toast
+        self._toast_job = self.root.after(3500, self._show_next_toast)
+
+    # --- pinned now strip -------------------------------------------------
+
+    def _now_strip_text(self, result: OverlaySnapshot) -> str:
+        candidates = sorted(
+            (
+                section
+                for section in result.sections
+                if (section.alert or section.role == "urgent") and section.rows
+            ),
+            key=lambda section: (not section.alert, section.priority),
+        )
+        if not candidates:
+            return ""
+        section = candidates[0]
+        return f"{section.title.upper()} · {section.rows[0].text}"
+
+    def _update_now_strip(self, result: OverlaySnapshot | Exception | str) -> None:
+        text = (
+            self._now_strip_text(result)
+            if isinstance(result, OverlaySnapshot)
+            else ""
+        )
+        if text == self._now_text:
+            return
+        self._now_text = text
+        self.now_label.configure(text=text)
+        self._layout_bars()
+
+    def _layout_bars(self) -> None:
+        """Keep the header bars packed in a stable order above the rail."""
+        if self._collapsed:
+            return
+        bars = (
+            (self.status_bar, True),
+            (self.now_strip, bool(self._now_text)),
+            (self.role_tabs, self._role_tabs_supported()),
+            (
+                self.map_controls,
+                self._map_position is not None and self._map_document is not None,
+            ),
+        )
+        if all(bool(bar.winfo_manager()) == visible for bar, visible in bars):
+            return
+        for bar, _ in bars:
+            bar.pack_forget()
+        for bar, visible in bars:
+            if visible:
+                bar.pack(fill="x", before=self.scrollbar)
 
     def _sync_map_tools(self, result: OverlaySnapshot | Exception | str) -> None:
         position = result.map_position if isinstance(result, OverlaySnapshot) else None
@@ -2382,7 +2615,7 @@ class OverlayWindow:
             self._map_position = None
             self._map_document = None
             self._map_overlays = ()
-            self.map_controls.pack_forget()
+            self._layout_bars()
             self._destroy_map_windows()
             return
         if document != self._map_document:
@@ -2396,8 +2629,7 @@ class OverlayWindow:
         self._map_position = position
         self._map_overlays = result.map_overlays
         record_map_path(document, position, self._hero_paths)
-        if not self._collapsed and not self.map_controls.winfo_manager():
-            self.map_controls.pack(fill="x", before=self.scrollbar)
+        self._layout_bars()
         for window in (self._map_window, self._minimap_window):
             if window is not None:
                 window.update(position, self._map_overlays)
@@ -2475,6 +2707,7 @@ class OverlayWindow:
         self._collapsed = not self._collapsed
         if self._collapsed:
             self.status_bar.pack_forget()
+            self.now_strip.pack_forget()
             self.role_tabs.pack_forget()
             self.map_controls.pack_forget()
             self.scrollbar.pack_forget()
@@ -2484,13 +2717,9 @@ class OverlayWindow:
         else:
             width, height = self._manual_dimensions
             self.WIDTH = width
-            self.status_bar.pack(fill="x")
-            if self._role_tabs_supported():
-                self.role_tabs.pack(fill="x")
-            if self._map_position is not None and self._map_document is not None:
-                self.map_controls.pack(fill="x")
             self.scrollbar.pack(side="right", fill="y")
             self.canvas.pack(side="left", fill="both", expand=True)
+            self._layout_bars()
             self._set_geometry(height)
             self._resize_to_content()
 
@@ -2509,14 +2738,32 @@ class OverlayWindow:
 
     def _select_role(self, role: str) -> None:
         self._active_role.set(role)
+        if self._local_settings is not None and self._role_game:
+            self._local_settings.save_active_role(self._role_game, role)
         self._toggle_role()
 
-    def _update_role_tabs(self) -> None:
+    def _restore_active_role(self, game: str) -> None:
+        """Load the tab last used for this game when the game changes."""
+        if game == self._role_game:
+            return
+        self._role_game = game
+        stored = (
+            self._local_settings.active_role(game)
+            if self._local_settings is not None
+            else None
+        )
+        if stored in set(ROLE_TABS):
+            self._active_role.set(stored)
+            self._update_role_tabs()
+
+    def _update_role_tabs(self, counts: dict[str, int] | None = None) -> None:
         selected = self._active_role.get()
         for role, button in self._role_buttons.items():
             active = role == selected
+            count = (counts or {}).get(role, 0)
             button.configure(
-                background=self.ACCENT if active else "#e6e1d4",
+                text=f"{role.upper()} {count}" if count else role.upper(),
+                background=self.ACCENT if active else self.SURFACE,
                 foreground="#ffffff" if active else self.FOREGROUND,
                 activebackground=self.FOREGROUND if active else self.DIVIDER,
                 activeforeground="#ffffff" if active else self.FOREGROUND,
@@ -2529,108 +2776,77 @@ class OverlayWindow:
         self._layout_dialog = LayoutSettingsDialog(
             self.root,
             self._layout_manager.profile,
-            self._high_contrast,
+            self._theme_preference,
+            self._idle_opacity,
             self._save_layout_settings,
         )
 
     def _save_layout_settings(
-        self, profile: LayoutProfile, high_contrast: bool
+        self, profile: LayoutProfile, theme_preference: str, opacity: float
     ) -> None:
         self._layout_manager.profile = profile
         self._layout_manager.current = None
-        contrast_changed = high_contrast != self._high_contrast
-        self._high_contrast = high_contrast
+        theme_changed = theme_preference != self._theme_preference
+        self._theme_preference = theme_preference
+        self._set_opacity(opacity)
         if self._local_settings is not None:
             self._local_settings.save_layout_profile(profile)
-            self._local_settings.save_high_contrast_override(high_contrast)
-        if contrast_changed:
-            self._apply_contrast_palette(high_contrast)
+            self._local_settings.save_theme(theme_preference)
+            self._local_settings.save_overlay_opacity(opacity)
+        if theme_changed:
+            self._apply_theme(resolve_theme(theme_preference))
         if isinstance(self._last_result, OverlaySnapshot):
             snapshot = self._last_result
             self._last_result = None
             self._render(snapshot)
 
-    def _apply_contrast_palette(self, enabled: bool) -> None:
-        old_values = {
-            self.BACKGROUND,
-            self.FOREGROUND,
-            self.MUTED,
-            self.ACCENT,
-            self.DIVIDER,
-            self.ALERT_BACKGROUND,
-            self.ALERT_FOREGROUND,
-            "#e6e1d4",
-        }
-        if enabled:
-            palette = (
-                "#ffffff",
-                "#000000",
-                "#333333",
-                "#0046b8",
-                "#000000",
-                "#ffffff",
-                "#a00000",
-            )
-        else:
-            palette = (
-                "#f4f1e8",
-                "#20251f",
-                "#687064",
-                "#bb3e2f",
-                "#cbc8bd",
-                "#ffe9e5",
-                "#9d1717",
-            )
-        (
-            self.BACKGROUND,
-            self.FOREGROUND,
-            self.MUTED,
-            self.ACCENT,
-            self.DIVIDER,
-            self.ALERT_BACKGROUND,
-            self.ALERT_FOREGROUND,
-        ) = palette
-        replacements = {
-            "#f4f1e8": self.BACKGROUND,
-            "#20251f": self.FOREGROUND,
-            "#687064": self.MUTED,
-            "#bb3e2f": self.ACCENT,
-            "#cbc8bd": self.DIVIDER,
-            "#ffe9e5": self.ALERT_BACKGROUND,
-            "#9d1717": self.ALERT_FOREGROUND,
-            "#e6e1d4": "#ffffff" if enabled else "#e6e1d4",
-            "#000000": self.FOREGROUND,
-            "#333333": self.MUTED,
-            "#0046b8": self.ACCENT,
-            "#ffffff": self.BACKGROUND,
-            "#a00000": self.ALERT_FOREGROUND,
-        }
-        for widget in self._widget_tree(self.root):
-            for option in (
-                "background",
-                "foreground",
-                "activebackground",
-                "activeforeground",
-                "highlightbackground",
-                "highlightcolor",
-                "selectcolor",
-            ):
-                try:
-                    current = str(widget.cget(option)).casefold()
-                except tk.TclError:
-                    continue
-                if current in {value.casefold() for value in old_values}:
-                    replacement = replacements.get(current, current)
-                    widget.configure(**{option: replacement})
+    def _apply_theme(self, name: str) -> None:
+        """Restyle the static chrome and force the rail to rebuild."""
+        self._set_palette(name)
         self.root.configure(background=self.BACKGROUND)
+        header_widgets = (
+            self.header, self.title_block, self.game_label, self.location_label,
+        )
+        for widget in header_widgets:
+            widget.configure(background=self.HEADER_BACKGROUND)
+        for widget in (self.game_label, self.location_label):
+            widget.configure(foreground=self.HEADER_FOREGROUND)
+        for button in (self.close_button, self.settings_button):
+            button.configure(
+                background=self.HEADER_BACKGROUND,
+                foreground=self.HEADER_FOREGROUND,
+                activebackground=self.ACCENT,
+            )
+        self.status_bar.configure(background=self.BACKGROUND)
+        self.status_label.configure(
+            background=self.BACKGROUND, foreground=self.MUTED
+        )
+        self.hide_caught_toggle.configure(
+            background=self.BACKGROUND,
+            foreground=self.MUTED,
+            activebackground=self.BACKGROUND,
+            activeforeground=self.FOREGROUND,
+            selectcolor=self.BACKGROUND,
+        )
+        self.now_strip.configure(background=self.ALERT_BACKGROUND)
+        self.now_label.configure(
+            background=self.ALERT_BACKGROUND, foreground=self.ALERT_FOREGROUND
+        )
+        self.role_tabs.configure(background=self.SURFACE)
+        self.map_controls.configure(background=self.SURFACE)
+        self.map_controls_label.configure(
+            background=self.SURFACE, foreground=self.MUTED
+        )
+        for button in self.map_buttons:
+            button.configure(
+                background=self.SURFACE,
+                foreground=self.ACCENT,
+                activebackground=self.SURFACE,
+                activeforeground=self.FOREGROUND,
+            )
+        self.canvas.configure(background=self.BACKGROUND)
         self._update_role_tabs()
-
-    @staticmethod
-    def _widget_tree(root: tk.Misc) -> tuple[tk.Misc, ...]:
-        widgets = [root]
-        for child in root.winfo_children():
-            widgets.extend(OverlayWindow._widget_tree(child))
-        return tuple(widgets)
+        self._rendered_layout = None
 
     def _toggle_section(self, key: tuple[str, str]) -> None:
         if key in self._expanded_sections:
@@ -2685,14 +2901,12 @@ class OverlayWindow:
         return changed
 
     def _sync_role_tabs(self, result: OverlaySnapshot) -> None:
-        supported = any(
-            section.role in {"area", "party", "goals", "urgent"}
-            for section in result.sections
-        ) and (self._active_layout is None or self._active_layout.mode != "dual-strips")
-        if supported and not self._collapsed and not self.role_tabs.winfo_manager():
-            self.role_tabs.pack(fill="x", before=self.scrollbar)
-        elif not supported and self.role_tabs.winfo_manager():
-            self.role_tabs.pack_forget()
+        counts = {
+            role: len(sections_for_role(result.sections, role))
+            for role in ROLE_TABS
+        }
+        self._update_role_tabs(counts)
+        self._layout_bars()
 
     def _role_tabs_supported(self) -> bool:
         return (
@@ -2773,9 +2987,13 @@ class OverlayWindow:
             return
         self._sync_caught_filter(result)
         self._sync_map_tools(result)
-        self._sync_detail_windows(result)
+        self._update_now_strip(result)
+        if isinstance(result, OverlaySnapshot):
+            self._restore_active_role(result.game)
+            self._queue_alert_toasts(result)
+            self._sync_role_tabs(result)
         section_views = self._section_views(result) if isinstance(result, OverlaySnapshot) else ()
-        layout = self._layout_signature(section_views)
+        layout = self._layout_signature(section_views, result)
         if isinstance(result, OverlaySnapshot) and layout == self._rendered_layout:
             self._last_result = result
             self.game_label.configure(text=result.game.upper())
@@ -2789,15 +3007,20 @@ class OverlayWindow:
             )
             for label, (section, _, _, _) in zip(self._section_labels, section_views):
                 label.configure(text=section.title.upper())
-            visible_rows = [row for _, rows, _, _ in section_views for row in rows]
-            for label, row in zip(self._row_labels, visible_rows):
-                label.configure(text=row.text)
-                self._update_row_tooltip(label, row.tooltip)
+            visible_rows = [
+                row
+                for view in section_views
+                for row in self._flat_view_rows(view, result)
+            ]
+            for row_view, row in zip(self._row_views, visible_rows):
+                row_view.update(row)
             return
         self._last_result = result
         self._rendered_layout = layout if isinstance(result, OverlaySnapshot) else None
         self._section_labels = []
         self._row_labels = []
+        self._row_views = []
+        self._filter_entries = {}
         self._row_tooltips = {}
         self._hide_row_tooltip()
         previous_content = self.content
@@ -2833,73 +3056,163 @@ class OverlayWindow:
             self._resize_to_content()
             return
 
-        for section, rows, hidden_count, section_key in section_views:
-            block_background = self.ALERT_BACKGROUND if section.alert else self.BACKGROUND
-            section_color = self.ALERT_FOREGROUND if section.alert else self.ACCENT
-            block = tk.Frame(self.content, background=block_background, padx=14, pady=5)
-            block.pack(fill="x")
-            section_label = tk.Label(
-                block, text=section.title.upper(), background=block_background,
-                foreground=section_color, font=self._section_font, anchor="w",
-                justify="left", wraplength=self.WIDTH - 28,
-            )
-            section_label.pack(fill="x", pady=(0, 5))
-            self._section_labels.append(section_label)
-            for row in rows:
-                row_frame = tk.Frame(block, background=block_background)
-                row_frame.pack(fill="x", pady=1)
-                indicator = "●" if row.caught else "○" if row.caught is False else ""
-                indicator_color = "#27824a" if row.caught else self.MUTED
-                tk.Label(
-                    row_frame, text=indicator, width=2, background=block_background,
-                    foreground=indicator_color, font=self._body_font, anchor="w",
-                ).pack(side="left")
-                row_label = tk.Label(
-                    row_frame, text=row.text, background=block_background,
-                    foreground=self.FOREGROUND, font=self._body_font, anchor="w",
-                    justify="left", wraplength=max(120, self.WIDTH - 76),
-                )
-                row_label.pack(side="left", fill="x", expand=True)
-                self._row_labels.append(row_label)
-                self._bind_row_tooltip(row_label, row.tooltip)
-            for action in section.actions:
-                tk.Button(
-                    block,
-                    text=action.label,
-                    command=lambda action=action: self._show_detail(action),
-                    background=block_background,
-                    foreground=section_color,
-                    activebackground=block_background,
-                    activeforeground=self.FOREGROUND,
-                    borderwidth=0,
-                    font=("Segoe UI Semibold", 9),
-                    anchor="w",
-                    padx=0,
-                    pady=3,
-                ).pack(fill="x")
-            if hidden_count or section_key in self._expanded_sections:
-                label = f"+{hidden_count} more" if hidden_count else "Show less"
-                tk.Button(
-                    block,
-                    text=label,
-                    command=lambda key=section_key: self._toggle_section(key),
-                    background=block_background,
-                    foreground=section_color,
-                    activebackground=block_background,
-                    activeforeground=self.FOREGROUND,
-                    borderwidth=0,
-                    font=("Segoe UI Semibold", 9),
-                    anchor="w",
-                    padx=0,
-                    pady=3,
-                ).pack(fill="x")
-            tk.Frame(
-                block,
-                height=1,
-                background=section_color if section.alert else self.DIVIDER,
-            ).pack(fill="x", pady=(7, 0))
+        focused_filter = self._focused_filter_key()
+        for view in section_views:
+            self._build_section_block(view, result)
+        if focused_filter is not None:
+            entry = self._filter_entries.get(focused_filter)
+            if entry is not None:
+                entry.focus_set()
+                entry.icursor("end")
         self._swap_content(previous_content)
         self._resize_to_content()
+
+    def _focused_filter_key(self) -> tuple[str, str, str] | None:
+        try:
+            focused = self.root.focus_get()
+        except (KeyError, tk.TclError):
+            return None
+        for key, entry in self._filter_entries.items():
+            if entry is focused:
+                return key
+        return None
+
+    def _build_section_block(
+        self,
+        view: tuple[PanelSection, tuple[PanelRow, ...], int, tuple[str, str]],
+        result: OverlaySnapshot,
+    ) -> None:
+        section, rows, hidden_count, section_key = view
+        block_background = self.ALERT_BACKGROUND if section.alert else self.BACKGROUND
+        section_color = self.ALERT_FOREGROUND if section.alert else self.ACCENT
+        block = tk.Frame(self.content, background=block_background, padx=14, pady=5)
+        block.pack(fill="x")
+        section_label = tk.Label(
+            block, text=section.title.upper(), background=block_background,
+            foreground=section_color, font=self._section_font, anchor="w",
+            justify="left", wraplength=self.WIDTH - 28,
+        )
+        section_label.pack(fill="x", pady=(0, 5))
+        self._section_labels.append(section_label)
+        for row in rows:
+            self._row_views.append(
+                _RowView(
+                    self, block, row, block_background,
+                    max(120, self.WIDTH - 76),
+                )
+            )
+        if hidden_count or section_key in self._expanded_sections:
+            label = f"+{hidden_count} more" if hidden_count else "Show less"
+            self._block_button(
+                block,
+                label,
+                lambda key=section_key: self._toggle_section(key),
+                block_background,
+                section_color,
+            )
+        for action in section.actions:
+            action_key = (result.game, section_key[1], action.label)
+            expanded = action_key in self._expanded_actions
+            arrow = "▾" if expanded else "▸"
+            self._block_button(
+                block,
+                f"{arrow} {action.label}",
+                lambda key=action_key: self._toggle_action(key),
+                block_background,
+                section_color,
+            )
+            if expanded:
+                self._build_inline_detail(block, action, action_key, result)
+        tk.Frame(
+            block,
+            height=1,
+            background=section_color if section.alert else self.DIVIDER,
+        ).pack(fill="x", pady=(7, 0))
+
+    def _block_button(
+        self,
+        parent: tk.Misc,
+        text: str,
+        command: Callable[[], None],
+        background: str,
+        foreground: str,
+    ) -> tk.Button:
+        button = tk.Button(
+            parent,
+            text=text,
+            command=command,
+            background=background,
+            foreground=foreground,
+            activebackground=background,
+            activeforeground=self.FOREGROUND,
+            borderwidth=0,
+            font=("Segoe UI Semibold", 9),
+            anchor="w",
+            padx=0,
+            pady=3,
+        )
+        button.pack(fill="x")
+        return button
+
+    def _build_inline_detail(
+        self,
+        block: tk.Frame,
+        action: PanelAction,
+        action_key: tuple[str, str, str],
+        result: OverlaySnapshot,
+    ) -> None:
+        all_rows = self._detail_rows(action.rows, result)
+        filter_text = self._detail_filters.get(action_key, "")
+        if len(all_rows) > self.FILTERABLE_DETAIL_ROWS or filter_text:
+            entry = tk.Entry(
+                block,
+                font=("Segoe UI", 9),
+                background=self.SURFACE,
+                foreground=self.FOREGROUND,
+                insertbackground=self.FOREGROUND,
+                relief="flat",
+            )
+            entry.insert(0, filter_text)
+            entry.pack(fill="x", padx=(8, 8), pady=(0, 3))
+            entry.bind(
+                "<KeyRelease>",
+                lambda event, key=action_key: self._set_detail_filter(
+                    key, event.widget.get()
+                ),
+            )
+            self._filter_entries[action_key] = entry
+        container = tk.Frame(block, background=self.BACKGROUND, padx=6)
+        container.pack(fill="x", pady=(0, 4))
+        wraplength = max(100, self.WIDTH - 96)
+        for row in filter_detail_rows(all_rows, filter_text):
+            role = party_detail_row_role(row.text)
+            if role == "pokemon":
+                view: object = _DetailPokemonView(self, container, row, wraplength)
+            elif role != "generic":
+                view = _DetailGridView(self, container, row, role, wraplength)
+            else:
+                view = _RowView(self, container, row, self.BACKGROUND, wraplength)
+            self._row_views.append(view)
+
+    def _flat_view_rows(
+        self,
+        view: tuple[PanelSection, tuple[PanelRow, ...], int, tuple[str, str]],
+        result: OverlaySnapshot,
+    ) -> list[PanelRow]:
+        """Rows in the order their views were built, for fast-path updates."""
+        section, rows, _, section_key = view
+        flat = list(rows)
+        for action in section.actions:
+            action_key = (result.game, section_key[1], action.label)
+            if action_key not in self._expanded_actions:
+                continue
+            flat.extend(
+                filter_detail_rows(
+                    self._detail_rows(action.rows, result),
+                    self._detail_filters.get(action_key, ""),
+                )
+            )
+        return flat
 
     def _section_views(
         self, result: OverlaySnapshot
@@ -2907,7 +3220,10 @@ class OverlayWindow:
         views = []
         hide_caught = result.supports_caught_filter and self._hide_caught.get()
         sections = sorted(
-            filter_caught_sections(result.sections, hide_caught),
+            filter_caught_sections(
+                sections_for_role(result.sections, self._active_role.get()),
+                hide_caught,
+            ),
             key=lambda section: (not section.alert, section.priority),
         )
         for section in sections:
@@ -2918,22 +3234,51 @@ class OverlayWindow:
             views.append((section, rows, hidden_count, section_key))
         return tuple(views)
 
+    def _row_structure(self, row: PanelRow) -> tuple[object, ...]:
+        role = party_detail_row_role(row.text)
+        if role == "pokemon":
+            return _DetailPokemonView.signature(row)
+        if role != "generic":
+            return _DetailGridView.signature(row, role)
+        return _RowView.signature(row)
+
     def _layout_signature(
         self,
         section_views: tuple[
             tuple[PanelSection, tuple[PanelRow, ...], int, tuple[str, str]], ...
         ],
+        result: OverlaySnapshot | OverlayDiagnostic | Exception | str | None = None,
     ) -> tuple[object, ...]:
-        return tuple(
-            (
-                section_key,
-                section.alert,
-                tuple(row.caught for row in rows),
-                tuple(action.label for action in section.actions),
-                hidden_count,
+        game = result.game if isinstance(result, OverlaySnapshot) else ""
+        signature = []
+        for section, rows, hidden_count, section_key in section_views:
+            actions = []
+            for action in section.actions:
+                action_key = (game, section_key[1], action.label)
+                expanded = action_key in self._expanded_actions
+                detail_structure: tuple[object, ...] = ()
+                filter_text = ""
+                if expanded and isinstance(result, OverlaySnapshot):
+                    filter_text = self._detail_filters.get(action_key, "")
+                    detail_structure = tuple(
+                        self._row_structure(row)
+                        for row in filter_detail_rows(
+                            self._detail_rows(action.rows, result), filter_text
+                        )
+                    )
+                actions.append(
+                    (action.label, expanded, filter_text, detail_structure)
+                )
+            signature.append(
+                (
+                    section_key,
+                    section.alert,
+                    tuple(_RowView.signature(row) for row in rows),
+                    tuple(actions),
+                    hidden_count,
+                )
             )
-            for section, rows, hidden_count, section_key in section_views
-        )
+        return tuple(signature)
 
     def _swap_content(self, previous_content: tk.Frame) -> None:
         scroll_position = self.canvas.yview()[0]
