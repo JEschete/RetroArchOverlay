@@ -2,6 +2,7 @@ import logging
 import tkinter as tk
 import time
 import webbrowser
+from collections.abc import Callable
 from tkinter import font as tkfont
 
 from PIL import Image, ImageChops, ImageTk
@@ -129,6 +130,18 @@ def map_source_point(position: MapPosition, layer: MapLayer) -> tuple[int, int]:
     )
 
 
+MIN_MAP_OPACITY = 0.3
+
+
+def uses_marker_glyph(waypoint: MapWaypoint) -> bool:
+    """A waypoint with an explicit marker draws its glyph whatever its kind."""
+    return bool(waypoint.marker) or waypoint.kind == "npcs"
+
+
+def clamp_opacity(value: float) -> float:
+    return max(MIN_MAP_OPACITY, min(1.0, float(value)))
+
+
 def waypoint_source_point(waypoint: MapWaypoint, layer: MapLayer) -> tuple[int, int]:
     return (
         ((waypoint.x + layer.offset_x) % layer.wrap_width) * layer.tile_width
@@ -163,6 +176,64 @@ def record_map_path(
 
 def wrapped_map_delta(point: float, center: float, span: int) -> float:
     return (point - center + span / 2) % span - span / 2
+
+
+def tooltip_shift(
+    bounds: tuple[float, float, float, float],
+    width: float,
+    height: float,
+    margin: float = 6,
+) -> tuple[float, float]:
+    """How far to nudge a tooltip so it stays fully inside the canvas."""
+    left, top, right, bottom = bounds
+    shift_x = 0.0
+    shift_y = 0.0
+    if right + margin > width:
+        shift_x = width - margin - right
+    if left + shift_x < margin:
+        shift_x = margin - left
+    if bottom + margin > height:
+        shift_y = height - margin - bottom
+    if top + shift_y < margin:
+        shift_y = margin - top
+    return shift_x, shift_y
+
+
+def clamped_view_origin(center: float, view_span: int, source_span: int) -> int:
+    """Top/left of a view_span window centred on center, kept inside the image."""
+    if view_span >= source_span:
+        return 0
+    return int(max(0, min(source_span - view_span, round(center - view_span / 2))))
+
+
+def view_origin(
+    center: float, view_span: int, source_span: int, wraps: bool
+) -> int:
+    """Wrapping maps stay centred on the player; the rest clamp at their edges."""
+    if not wraps:
+        return clamped_view_origin(center, view_span, source_span)
+    return int(round(center - view_span / 2)) % max(source_span, 1)
+
+
+def view_delta(coord: float, origin: float, span: int, wraps: bool) -> float:
+    """Distance from the top/left of the view to a point, the short way round."""
+    if not wraps:
+        return coord - origin
+    return (coord - origin) % max(span, 1)
+
+
+def crop_view(
+    source: Image.Image,
+    left: int,
+    top: int,
+    view_width: int,
+    view_height: int,
+    wraps: bool,
+) -> Image.Image:
+    if not wraps:
+        return source.crop((left, top, left + view_width, top + view_height))
+    shifted = ImageChops.offset(source, -left, -top)
+    return shifted.crop((0, 0, view_width, view_height))
 
 
 def tracked_map_position(
@@ -213,6 +284,8 @@ class CoordinateMapWindow:
         initial_geometry: ScreenRect | None = None,
         hero_paths: dict[str, list[tuple[int, int]]] | None = None,
         hang_watchdog: UIHangWatchdog | None = None,
+        initial_view: dict[str, object] | None = None,
+        on_view_change: Callable[[], None] | None = None,
     ) -> None:
         if not document.layers:
             raise ValueError("Map document must contain at least one layer")
@@ -268,6 +341,10 @@ class CoordinateMapWindow:
         self.window.configure(background=OverlayWindow.BACKGROUND)
         self.window.protocol("WM_DELETE_WINDOW", self.hide)
         self.mode = tk.StringVar(value=document.layers[0].key)
+        self.opacity = tk.DoubleVar(value=1.0)
+        self.opacity_percent = tk.IntVar(value=100)
+        self._on_view_change = on_view_change
+        self._restore_view_state(initial_view)
         if not compact:
             toolbar = tk.Frame(self.window, background=OverlayWindow.FOREGROUND, padx=10, pady=8)
             toolbar.pack(fill="x")
@@ -277,7 +354,7 @@ class CoordinateMapWindow:
                     text=layer.title.upper(),
                     value=layer.key,
                     variable=self.mode,
-                    command=self._redraw,
+                    command=self._view_changed,
                     indicatoron=False,
                     background=OverlayWindow.FOREGROUND,
                     foreground="#ffffff",
@@ -342,7 +419,7 @@ class CoordinateMapWindow:
                     overlay_bar,
                     text=self.OVERLAY_LABELS.get(kind, kind.replace("_", " ").title()),
                     variable=visible,
-                    command=self._redraw,
+                    command=self._view_changed,
                     background=OverlayWindow.FOREGROUND,
                     foreground="#ffffff",
                     selectcolor=OverlayWindow.FOREGROUND,
@@ -353,11 +430,37 @@ class CoordinateMapWindow:
                     padx=3,
                     pady=1,
                 ).pack(side="left", padx=(0, 6))
+            tk.Scale(
+                overlay_bar,
+                from_=MIN_MAP_OPACITY * 100,
+                to=100,
+                resolution=5,
+                orient="horizontal",
+                variable=self.opacity_percent,
+                command=self._opacity_percent_changed,
+                showvalue=False,
+                length=76,
+                width=8,
+                sliderlength=14,
+                background=OverlayWindow.FOREGROUND,
+                foreground="#ffffff",
+                troughcolor=OverlayWindow.BACKGROUND,
+                highlightthickness=0,
+                borderwidth=0,
+            ).pack(side="right", padx=(4, 0))
+            self.opacity_label = tk.Label(
+                overlay_bar,
+                text="OPACITY",
+                background=OverlayWindow.FOREGROUND,
+                foreground="#b9c1bc",
+                font=("Segoe UI Semibold", 8),
+            )
+            self.opacity_label.pack(side="right", padx=(8, 4))
             tk.Checkbutton(
                 overlay_bar,
                 text="Hide collected",
                 variable=self.hide_completed_waypoints,
-                command=self._redraw,
+                command=self._view_changed,
                 background=OverlayWindow.FOREGROUND,
                 foreground="#ffffff",
                 selectcolor=OverlayWindow.FOREGROUND,
@@ -421,19 +524,7 @@ class CoordinateMapWindow:
             state="disabled",
             tags=("waypoint-tooltip",),
         )
-        bounds = self.canvas.bbox(label)
-        if bounds is not None:
-            background = self.canvas.create_rectangle(
-                bounds[0] - 6,
-                bounds[1] - 4,
-                bounds[2] + 6,
-                bounds[3] + 4,
-                fill="#20251f",
-                outline="#f8c24e",
-                state="disabled",
-                tags=("waypoint-tooltip",),
-            )
-            self.canvas.tag_lower(background, label)
+        self._frame_tooltip(label, "#f8c24e")
 
     def _show_region(self, region: MapRegion, x: float, y: float) -> None:
         self.canvas.delete("waypoint-tooltip")
@@ -449,19 +540,36 @@ class CoordinateMapWindow:
             state="disabled",
             tags=("waypoint-tooltip",),
         )
+        self._frame_tooltip(label, region.color)
+
+    def _frame_tooltip(self, label: int, outline: str = "#f8c24e") -> None:
         bounds = self.canvas.bbox(label)
-        if bounds is not None:
-            background = self.canvas.create_rectangle(
-                bounds[0] - 6,
-                bounds[1] - 4,
-                bounds[2] + 6,
-                bounds[3] + 4,
-                fill="#20251f",
-                outline=region.color,
-                state="disabled",
-                tags=("waypoint-tooltip",),
-            )
-            self.canvas.tag_lower(background, label)
+        if bounds is None:
+            return
+        try:
+            width = float(self.canvas.winfo_width())
+            height = float(self.canvas.winfo_height())
+        except (TypeError, ValueError):
+            width = height = 0.0
+        shift_x, shift_y = (
+            tooltip_shift(bounds, width, height) if width and height else (0.0, 0.0)
+        )
+        if shift_x or shift_y:
+            self.canvas.move(label, shift_x, shift_y)
+            bounds = self.canvas.bbox(label)
+            if bounds is None:
+                return
+        background = self.canvas.create_rectangle(
+            bounds[0] - 6,
+            bounds[1] - 4,
+            bounds[2] + 6,
+            bounds[3] + 4,
+            fill="#20251f",
+            outline=outline,
+            state="disabled",
+            tags=("waypoint-tooltip",),
+        )
+        self.canvas.tag_lower(background, label)
 
     def _hide_waypoint(self) -> None:
         self.canvas.delete("waypoint-tooltip")
@@ -476,6 +584,60 @@ class CoordinateMapWindow:
         self.window.deiconify()
         self.window.lift()
         self._redraw()
+
+    def _restore_view_state(self, state: dict[str, object] | None) -> None:
+        if isinstance(state, dict):
+            layer = state.get("layer")
+            if isinstance(layer, str) and layer in self.layers:
+                self.mode.set(layer)
+            overlays = state.get("overlays")
+            if isinstance(overlays, dict):
+                for kind, visible in overlays.items():
+                    variable = self.waypoint_visibility.get(kind)
+                    if variable is not None and isinstance(visible, bool):
+                        variable.set(visible)
+            hide_completed = state.get("hide_completed")
+            if isinstance(hide_completed, bool):
+                self.hide_completed_waypoints.set(hide_completed)
+            opacity = state.get("opacity")
+            if isinstance(opacity, (int, float)) and not isinstance(opacity, bool):
+                self.opacity.set(clamp_opacity(float(opacity)))
+        self.opacity_percent.set(int(round(clamp_opacity(self.opacity.get()) * 100)))
+        self._apply_opacity()
+
+    def _opacity_percent_changed(self, value: str) -> None:
+        try:
+            self.opacity.set(clamp_opacity(float(value) / 100))
+        except (TypeError, ValueError):
+            return
+        self._opacity_changed()
+
+    def _apply_opacity(self) -> None:
+        try:
+            self.window.attributes("-alpha", clamp_opacity(self.opacity.get()))
+        except tk.TclError:
+            pass
+
+    def _opacity_changed(self, _value: str = "") -> None:
+        self._apply_opacity()
+        if self._on_view_change is not None:
+            self._on_view_change()
+
+    def _view_changed(self) -> None:
+        self._redraw()
+        if self._on_view_change is not None:
+            self._on_view_change()
+
+    def view_state(self) -> dict[str, object]:
+        return {
+            "layer": self.mode.get(),
+            "overlays": {
+                kind: bool(variable.get())
+                for kind, variable in self.waypoint_visibility.items()
+            },
+            "hide_completed": bool(self.hide_completed_waypoints.get()),
+            "opacity": round(clamp_opacity(self.opacity.get()), 2),
+        }
 
     def toggle(self) -> None:
         if self.window.state() == "withdrawn":
@@ -807,46 +969,39 @@ class CoordinateMapWindow:
         self._set_hang_context("full-redraw-source-image")
         source = self._image(map_key)
         source_x, source_y = map_source_point(self.position, layer)
+        wraps = layer.wraps
         if self.compact:
             crop_size = 18 * 16
-            shifted = ImageChops.offset(
-                source,
-                source.width // 2 - source_x,
-                source.height // 2 - source_y,
-            )
-            crop = shifted.crop(
-                (
-                    source.width // 2 - crop_size // 2,
-                    source.height // 2 - crop_size // 2,
-                    source.width // 2 + crop_size // 2,
-                    source.height // 2 + crop_size // 2,
-                )
+            crop_width = crop_size if wraps else min(crop_size, source.width)
+            crop_height = crop_size if wraps else min(crop_size, source.height)
+            view_left = view_origin(source_x, crop_width, source.width, wraps)
+            view_top = view_origin(source_y, crop_height, source.height, wraps)
+            crop = crop_view(
+                source, view_left, view_top, crop_width, crop_height, wraps
             )
             side = min(width, height)
             rendered = crop.resize((side, side), Image.Resampling.NEAREST)
+            scale = side / max(crop_width, 1)
             image_x = (width - side) / 2
             image_y = (height - side) / 2
-            marker_x = width / 2
-            marker_y = height / 2
+            marker_x = image_x + view_delta(
+                source_x, view_left, source.width, wraps
+            ) * scale
+            marker_y = image_y + view_delta(
+                source_y, view_top, source.height, wraps
+            ) * side / max(crop_height, 1)
         else:
             view = source
+            view_left = view_top = 0
             if self.zoom > 1:
-                center_x = (source_x + self._pan_source[0]) % source.width
-                center_y = (source_y + self._pan_source[1]) % source.height
-                shifted = ImageChops.offset(
-                    source,
-                    round(source.width / 2 - center_x),
-                    round(source.height / 2 - center_y),
-                )
-                crop_width = source.width // self.zoom
-                crop_height = source.height // self.zoom
-                view = shifted.crop(
-                    (
-                        (source.width - crop_width) // 2,
-                        (source.height - crop_height) // 2,
-                        (source.width + crop_width) // 2,
-                        (source.height + crop_height) // 2,
-                    )
+                center_x = source_x + self._pan_source[0]
+                center_y = source_y + self._pan_source[1]
+                crop_width = max(1, source.width // self.zoom)
+                crop_height = max(1, source.height // self.zoom)
+                view_left = view_origin(center_x, crop_width, source.width, wraps)
+                view_top = view_origin(center_y, crop_height, source.height, wraps)
+                view = crop_view(
+                    source, view_left, view_top, crop_width, crop_height, wraps
                 )
             scale = min(width / view.width, height / view.height)
             image_width = max(1, int(view.width * scale))
@@ -868,16 +1023,12 @@ class CoordinateMapWindow:
                 )
             image_x = (width - image_width) / 2
             image_y = (height - image_height) / 2
-            if self.zoom == 1:
-                marker_x = image_x + source_x * scale
-                marker_y = image_y + source_y * scale
-            else:
-                marker_x = width / 2 + wrapped_map_delta(
-                    source_x, center_x, source.width
-                ) * scale
-                marker_y = height / 2 + wrapped_map_delta(
-                    source_y, center_y, source.height
-                ) * scale
+            marker_x = image_x + view_delta(
+                source_x, view_left, source.width, wraps
+            ) * scale
+            marker_y = image_y + view_delta(
+                source_y, view_top, source.height, wraps
+            ) * scale
         photo_key = (
             (map_key, image_width, image_height)
             if not self.compact and self.zoom == 1
@@ -898,8 +1049,8 @@ class CoordinateMapWindow:
                 image_x,
                 image_y,
                 scale,
-                center_x if self.zoom > 1 else None,
-                center_y if self.zoom > 1 else None,
+                view_left,
+                view_top,
             )
         if not self.compact:
             self._set_hang_context(
@@ -911,12 +1062,12 @@ class CoordinateMapWindow:
                     continue
                 source_left = (region.x + layer.offset_x) * layer.tile_width
                 source_top = (region.y + layer.offset_y) * layer.tile_height
-                if self.zoom == 1:
-                    left = image_x + source_left * scale
-                    top = image_y + source_top * scale
-                else:
-                    left = width / 2 + wrapped_map_delta(source_left, center_x, source.width) * scale
-                    top = height / 2 + wrapped_map_delta(source_top, center_y, source.height) * scale
+                left = image_x + view_delta(
+                    source_left, view_left, source.width, wraps
+                ) * scale
+                top = image_y + view_delta(
+                    source_top, view_top, source.height, wraps
+                ) * scale
                 right = left + region.width * layer.tile_width * scale
                 bottom = top + region.height * layer.tile_height * scale
                 if right < 0 or bottom < 0 or left > width or top > height:
@@ -978,23 +1129,12 @@ class CoordinateMapWindow:
             if waypoint.completed and self.hide_completed_waypoints.get():
                 continue
             waypoint_x, waypoint_y = waypoint_source_point(waypoint, layer)
-            if self.compact:
-                point_x = width / 2 + wrapped_map_delta(
-                    waypoint_x, source_x, source.width
-                ) * side / crop_size
-                point_y = height / 2 + wrapped_map_delta(
-                    waypoint_y, source_y, source.height
-                ) * side / crop_size
-            elif self.zoom == 1:
-                point_x = image_x + waypoint_x * scale
-                point_y = image_y + waypoint_y * scale
-            else:
-                point_x = width / 2 + wrapped_map_delta(
-                    waypoint_x, center_x, source.width
-                ) * scale
-                point_y = height / 2 + wrapped_map_delta(
-                    waypoint_y, center_y, source.height
-                ) * scale
+            point_x = image_x + view_delta(
+                waypoint_x, view_left, source.width, wraps
+            ) * scale
+            point_y = image_y + view_delta(
+                waypoint_y, view_top, source.height, wraps
+            ) * scale
             if not 0 <= point_x <= width or not 0 <= point_y <= height:
                 continue
             tag = f"waypoint-{index}"
@@ -1090,7 +1230,7 @@ class CoordinateMapWindow:
                 tags=(tag, "waypoint", "objective-marker"),
             )
             return
-        if waypoint.kind != "npcs":
+        if not uses_marker_glyph(waypoint):
             color = (
                 "#16817a" if waypoint.kind == "collectibles" else "#bb3e2f"
             )
@@ -1113,6 +1253,7 @@ class CoordinateMapWindow:
             "quest": ("#d38a17", "!"),
             "item": ("#f0b429", "*"),
             "boss": ("#b83232", "X"),
+            "building": ("#7c5cbf", "B"),
             "person": ("#6b7280", ""),
         }.get(marker, ("#6b7280", ""))
         fill = "#767b77" if waypoint.completed else color
@@ -1144,7 +1285,7 @@ class CoordinateMapWindow:
                 width=1,
                 tags=(tag, "waypoint"),
             )
-        elif marker == "service":
+        elif marker in {"service", "building"}:
             self.canvas.create_rectangle(
                 point_x - 5,
                 point_y - 5,
@@ -1263,9 +1404,10 @@ class CoordinateMapWindow:
         image_x: float,
         image_y: float,
         scale: float,
-        center_x: float | None,
-        center_y: float | None,
+        view_left: float = 0,
+        view_top: float = 0,
     ) -> None:
+        wraps = layer.wraps
         self.canvas.delete("hero-path")
         path = self._hero_paths.get(layer.key, ())
         self._drawn_path_lengths[layer.key] = len(path)
@@ -1281,8 +1423,9 @@ class CoordinateMapWindow:
                 image_x,
                 image_y,
                 scale,
-                center_x,
-                center_y,
+                view_left,
+                view_top,
+                wraps,
             )
             for point in path
         ]
@@ -1319,7 +1462,7 @@ class CoordinateMapWindow:
             return
         if drawn > len(path) or drawn == 0:
             self._draw_hero_path(
-                layer, source, width, height, image_x, image_y, scale, None, None
+                layer, source, width, height, image_x, image_y, scale, view_left, view_top
             )
             return
         for index in range(max(1, drawn), len(path)):
@@ -1331,8 +1474,9 @@ class CoordinateMapWindow:
                 image_x,
                 image_y,
                 scale,
-                None,
-                None,
+                view_left,
+                view_top,
+                wraps,
             )
             end = self._project_path_point(
                 path[index],
@@ -1342,8 +1486,9 @@ class CoordinateMapWindow:
                 image_x,
                 image_y,
                 scale,
-                None,
-                None,
+                view_left,
+                view_top,
+                wraps,
             )
             if self._path_segment_visible(start, end, width, height):
                 self.canvas.create_line(
@@ -1356,7 +1501,7 @@ class CoordinateMapWindow:
         self._drawn_path_lengths[layer.key] = len(path)
         if len(self.canvas.find_withtag("hero-path-increment")) >= self.PATH_INCREMENT_LIMIT:
             self._draw_hero_path(
-                layer, source, width, height, image_x, image_y, scale, None, None
+                layer, source, width, height, image_x, image_y, scale, view_left, view_top
             )
 
     def _project_path_point(
@@ -1368,15 +1513,14 @@ class CoordinateMapWindow:
         image_x: float,
         image_y: float,
         scale: float,
-        center_x: float | None,
-        center_y: float | None,
+        view_left: float = 0,
+        view_top: float = 0,
+        wraps: bool = False,
     ) -> tuple[float, float]:
         path_x, path_y = point
-        if center_x is None or center_y is None:
-            return image_x + path_x * scale, image_y + path_y * scale
         return (
-            width / 2 + wrapped_map_delta(path_x, center_x, source.width) * scale,
-            height / 2 + wrapped_map_delta(path_y, center_y, source.height) * scale,
+            image_x + view_delta(path_x, view_left, source.width, wraps) * scale,
+            image_y + view_delta(path_y, view_top, source.height, wraps) * scale,
         )
 
     @staticmethod
@@ -1532,6 +1676,7 @@ class OverlayWindow:
         self._map_document: MapDocument | None = None
         self._map_overlays: tuple[MapOverlay, ...] = ()
         self._hero_paths: dict[str, list[tuple[int, int]]] = {}
+        self._hero_paths_title = ""
         self._map_window: CoordinateMapWindow | None = None
         self._minimap_window: CoordinateMapWindow | None = None
         self._secondary_window: tk.Toplevel | None = None
@@ -1719,6 +1864,7 @@ class OverlayWindow:
                 pass
             self._heartbeat_job = None
         self._controller.stop()
+        self._save_hero_paths()
         self._save_window_geometry("main", self.root)
         if self._manual_dimensions is not None:
             self._save_window_geometry("main-native", self.root)
@@ -1826,6 +1972,8 @@ class OverlayWindow:
                 initial_geometry=self._window_geometry("map"),
                 hero_paths=self._hero_paths,
                 hang_watchdog=self._hang_watchdog,
+                initial_view=self._local_settings.map_view_state("map"),
+                on_view_change=lambda: self._save_map_view_state("map"),
             )
         self._map_window.update(self._map_position, self._map_overlays)
         self._map_window.toggle()
@@ -1841,13 +1989,46 @@ class OverlayWindow:
                 initial_geometry=self._window_geometry("minimap"),
                 hero_paths=self._hero_paths,
                 hang_watchdog=self._hang_watchdog,
+                initial_view=self._local_settings.map_view_state("minimap"),
+                on_view_change=lambda: self._save_map_view_state("minimap"),
             )
         self._minimap_window.update(self._map_position, self._map_overlays)
         self._minimap_window.toggle()
 
+    def _load_hero_paths(self, title: str) -> None:
+        self._hero_paths_title = title
+        if self._hero_paths:
+            return
+        try:
+            stored = self._local_settings.hero_paths(title)
+        except OSError:
+            return
+        for key, points in stored.items():
+            self._hero_paths[key] = list(points)
+
+    def _save_hero_paths(self) -> None:
+        if not self._hero_paths_title:
+            return
+        try:
+            self._local_settings.save_hero_paths(
+                self._hero_paths_title, self._hero_paths
+            )
+        except OSError:
+            LOGGER.warning("Could not persist the hero path")
+
+    def _save_map_view_state(self, key: str) -> None:
+        window = self._map_window if key == "map" else self._minimap_window
+        if window is None:
+            return
+        try:
+            self._local_settings.save_map_view_state(key, window.view_state())
+        except OSError:
+            LOGGER.warning("Could not persist %s view state", key)
+
     def _destroy_map_windows(self) -> None:
         for key, window in (("map", self._map_window), ("minimap", self._minimap_window)):
             if window is not None:
+                self._save_map_view_state(key)
                 self._save_window_geometry(key, window.window)
                 window.destroy()
         self._map_window = None
@@ -2201,14 +2382,16 @@ class OverlayWindow:
             self._map_position = None
             self._map_document = None
             self._map_overlays = ()
-            self._hero_paths.clear()
             self.map_controls.pack_forget()
             self._destroy_map_windows()
             return
         if document != self._map_document:
             if self._map_document is not None and document.title != self._map_document.title:
+                self._save_hero_paths()
                 self._hero_paths.clear()
             self._destroy_map_windows()
+        if document.title != self._hero_paths_title:
+            self._load_hero_paths(document.title)
         self._map_document = document
         self._map_position = position
         self._map_overlays = result.map_overlays

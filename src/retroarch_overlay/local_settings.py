@@ -105,6 +105,77 @@ class LocalPluginSettings:
         }
         self._write(document)
 
+    def hero_paths_path(self) -> Path:
+        return self.path.with_name("hero_paths.json")
+
+    def hero_paths(self, title: str) -> dict[str, list[tuple[int, int]]]:
+        path = self.hero_paths_path()
+        if not path.is_file():
+            return {}
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(document, dict):
+            return {}
+        stored = document.get(title)
+        if not isinstance(stored, dict):
+            return {}
+        paths: dict[str, list[tuple[int, int]]] = {}
+        for key, points in stored.items():
+            if not isinstance(key, str) or not isinstance(points, list):
+                continue
+            cleaned = [
+                (point[0], point[1])
+                for point in points
+                if isinstance(point, list)
+                and len(point) == 2
+                and all(isinstance(value, int) for value in point)
+            ]
+            if cleaned:
+                paths[key] = cleaned
+        return paths
+
+    def save_hero_paths(
+        self, title: str, paths: dict[str, list[tuple[int, int]]], limit: int = 20_000
+    ) -> None:
+        path = self.hero_paths_path()
+        document: dict[str, object] = {}
+        if path.is_file():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    document = loaded
+            except (OSError, json.JSONDecodeError):
+                document = {}
+        trimmed = {
+            key: [list(point) for point in points[-limit:]]
+            for key, points in paths.items()
+            if points
+        }
+        if trimmed:
+            document[title] = trimmed
+        else:
+            document.pop(title, None)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(document, separators=(",", ":")), encoding="utf-8")
+
+    def map_view_state(self, key: str) -> dict[str, object]:
+        values = self._document().get("map_view_states", {})
+        if not isinstance(values, dict):
+            return {}
+        value = values.get(key)
+        return value if isinstance(value, dict) else {}
+
+    def save_map_view_state(self, key: str, state: dict[str, object]) -> None:
+        document = self._document()
+        values = document.setdefault("map_view_states", {})
+        if not isinstance(values, dict):
+            values = {}
+            document["map_view_states"] = values
+        values[key] = state
+        self._write(document)
+
     def high_contrast_override(self) -> bool | None:
         value = self._document().get("high_contrast")
         return value if isinstance(value, bool) else None

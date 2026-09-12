@@ -145,3 +145,36 @@ class LocalPluginSettingsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MapViewStateTests(unittest.TestCase):
+    def test_map_view_state_round_trips_per_window(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = LocalPluginSettings(Path(directory) / "local_settings.json")
+            state = {
+                "layer": "route119",
+                "overlays": {"trainers": False, "items": True},
+                "hide_completed": True,
+                "opacity": 0.75,
+            }
+
+            settings.save_map_view_state("map", state)
+
+            self.assertEqual(settings.map_view_state("map"), state)
+            self.assertEqual(settings.map_view_state("minimap"), {})
+
+    def test_map_view_state_survives_a_new_settings_instance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "local_settings.json"
+            LocalPluginSettings(path).save_map_view_state("map", {"opacity": 0.5})
+
+            self.assertEqual(
+                LocalPluginSettings(path).map_view_state("map"), {"opacity": 0.5}
+            )
+
+    def test_corrupt_map_view_state_is_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "local_settings.json"
+            path.write_text(json.dumps({"map_view_states": "nonsense"}), encoding="utf-8")
+
+            self.assertEqual(LocalPluginSettings(path).map_view_state("map"), {})

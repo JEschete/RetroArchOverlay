@@ -12,6 +12,12 @@ from retroarch_overlay.ra_plugin_metadata import RAGameSelectionRequired
 from retroarch_overlay.retroarch_installation import network_commands_enabled
 from retroarch_overlay.ui import (
     append_map_path,
+    clamp_opacity,
+    clamped_view_origin,
+    tooltip_shift,
+    view_delta,
+    view_origin,
+    uses_marker_glyph,
     clamp_overlay_size,
     CoordinateMapWindow,
     SnapshotCadence,
@@ -705,10 +711,9 @@ class MapProjectionTests(unittest.TestCase):
         window.layers = {self.wrapped_layer.key: self.wrapped_layer}
         window._map_key = Mock(return_value=self.wrapped_layer.key)
         source = Mock(width=4096, height=4096)
-        shifted = Mock()
         crop = Mock()
         rendered = Mock()
-        shifted.crop.return_value = crop
+        source.crop.return_value = crop
         crop.resize.return_value = rendered
         window._image = Mock(return_value=source)
         window._set_hang_context = Mock()
@@ -722,15 +727,20 @@ class MapProjectionTests(unittest.TestCase):
         window.credit = Mock()
         window.heading = Mock()
 
-        with (
-            patch("retroarch_overlay.ui.ImageChops.offset", return_value=shifted),
-            patch("retroarch_overlay.ui.ImageTk.PhotoImage", return_value=Mock()),
-        ):
+        with patch("retroarch_overlay.ui.ImageTk.PhotoImage", return_value=Mock()):
             window._draw()
 
         window._draw_hero_path.assert_not_called()
         window.canvas.create_image.assert_called_once()
         window.canvas.create_oval.assert_called_once()
+        # The minimap crops a clamped window straight out of the source rather
+        # than rotating the image, so it can never wrap past an edge.
+        source.crop.assert_called_once()
+        left, top, right, bottom = source.crop.call_args[0][0]
+        self.assertGreaterEqual(left, 0)
+        self.assertGreaterEqual(top, 0)
+        self.assertLessEqual(right, source.width)
+        self.assertLessEqual(bottom, source.height)
 
     def test_visible_fit_map_updates_only_dynamic_items_while_walking(self) -> None:
         document = MapDocument("Game", (self.wrapped_layer,))
@@ -768,6 +778,8 @@ class MapProjectionTests(unittest.TestCase):
         window.canvas = Mock()
         window.canvas.create_text.return_value = 10
         window.canvas.bbox.return_value = (10, 10, 100, 50)
+        window.canvas.winfo_width.return_value = 400
+        window.canvas.winfo_height.return_value = 300
         region = MapRegion(0, 0, 16, 16, "Enemies", "Slime", "encounters")
 
         window._show_region(region, 20, 20)
@@ -842,6 +854,8 @@ class MapProjectionTests(unittest.TestCase):
         window.canvas = Mock()
         window.canvas.create_text.return_value = 10
         window.canvas.bbox.return_value = (10, 10, 100, 50)
+        window.canvas.winfo_width.return_value = 400
+        window.canvas.winfo_height.return_value = 300
 
         window._show_waypoint(MapWaypoint(1, 2, "Shop"), 20, 20)
 
@@ -929,3 +943,87 @@ class MapProjectionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MapMarkerGlyphTests(unittest.TestCase):
+    def test_explicit_marker_draws_a_glyph_for_any_kind(self) -> None:
+        for kind in ("trainers", "items", "hidden_items", "feebas", "berries"):
+            with self.subTest(kind=kind):
+                waypoint = MapWaypoint(0, 0, "T", "", kind, False, "boss")
+                self.assertTrue(uses_marker_glyph(waypoint))
+
+    def test_npc_waypoints_keep_their_glyph_without_a_marker(self) -> None:
+        self.assertTrue(uses_marker_glyph(MapWaypoint(0, 0, "N", "", "npcs")))
+
+    def test_markerless_waypoints_keep_the_plain_dot(self) -> None:
+        for kind in ("collectibles", "entrance", "encounters"):
+            with self.subTest(kind=kind):
+                self.assertFalse(uses_marker_glyph(MapWaypoint(0, 0, "C", "", kind)))
+
+
+class MapOpacityTests(unittest.TestCase):
+    def test_opacity_is_clamped_to_a_visible_range(self) -> None:
+        self.assertEqual(clamp_opacity(1.5), 1.0)
+        self.assertEqual(clamp_opacity(0.0), 0.3)
+        self.assertEqual(clamp_opacity(0.65), 0.65)
+
+
+class ClampedViewportTests(unittest.TestCase):
+    def test_window_is_centred_when_it_fits(self) -> None:
+        self.assertEqual(clamped_view_origin(500, 100, 1000), 450)
+
+    def test_window_never_starts_before_the_left_edge(self) -> None:
+        self.assertEqual(clamped_view_origin(10, 100, 1000), 0)
+
+    def test_window_never_runs_past_the_right_edge(self) -> None:
+        self.assertEqual(clamped_view_origin(995, 100, 1000), 900)
+
+    def test_window_larger_than_the_image_starts_at_zero(self) -> None:
+        self.assertEqual(clamped_view_origin(500, 2000, 1000), 0)
+
+    def test_edge_windows_stay_inside_the_image_for_every_zoom(self) -> None:
+        source = 640
+        for zoom in (2, 4, 8, 16):
+            span = source // zoom
+            for centre in (0, 1, source // 2, source - 1, source + 50):
+                with self.subTest(zoom=zoom, centre=centre):
+                    origin = clamped_view_origin(centre, span, source)
+                    self.assertGreaterEqual(origin, 0)
+                    self.assertLessEqual(origin + span, source)
+
+
+class TooltipClampingTests(unittest.TestCase):
+    def test_tooltip_inside_the_canvas_is_left_alone(self) -> None:
+        self.assertEqual(tooltip_shift((50, 50, 150, 90), 400, 300), (0.0, 0.0))
+
+    def test_tooltip_past_the_right_edge_is_pulled_back(self) -> None:
+        shift_x, _ = tooltip_shift((320, 50, 420, 90), 400, 300)
+        self.assertEqual(shift_x, -26)
+
+    def test_tooltip_above_the_top_edge_is_pushed_down(self) -> None:
+        _, shift_y = tooltip_shift((50, -20, 150, 10), 400, 300)
+        self.assertEqual(shift_y, 26)
+
+    def test_tooltip_stays_inside_on_every_corner(self) -> None:
+        width, height = 400, 300
+        for left, top in ((-30, -30), (380, -30), (-30, 280), (380, 280)):
+            with self.subTest(corner=(left, top)):
+                bounds = (left, top, left + 120, top + 40)
+                dx, dy = tooltip_shift(bounds, width, height)
+                self.assertGreaterEqual(bounds[0] + dx, 0)
+                self.assertGreaterEqual(bounds[1] + dy, 0)
+                self.assertLessEqual(bounds[2] + dx, width)
+                self.assertLessEqual(bounds[3] + dy, height)
+
+
+class WrappingLayerTests(unittest.TestCase):
+    def test_clamping_layers_stop_at_the_edge(self) -> None:
+        self.assertEqual(view_origin(5, 100, 1000, False), 0)
+        self.assertEqual(view_delta(20, 0, 1000, False), 20)
+
+    def test_wrapping_layers_stay_centred_on_the_player(self) -> None:
+        self.assertEqual(view_origin(5, 100, 1000, True), 955)
+        self.assertEqual(view_delta(5, 955, 1000, True), 50)
+
+    def test_wrapping_delta_takes_the_short_way_round(self) -> None:
+        self.assertEqual(view_delta(2, 990, 1000, True), 12)

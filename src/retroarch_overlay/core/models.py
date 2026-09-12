@@ -137,6 +137,9 @@ class MapLayer:
     image_loader: Callable[[], Path] | None = None
     waypoints: tuple[MapWaypoint, ...] = ()
     regions: tuple[MapRegion, ...] = ()
+    # True only for genuinely toroidal maps, where walking off one edge brings
+    # you out of the other. Everything else clamps at its borders.
+    wraps: bool = False
 
 
 @dataclass(frozen=True, slots=True)
