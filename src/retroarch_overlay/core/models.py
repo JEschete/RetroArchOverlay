@@ -39,6 +39,7 @@ class PanelAction:
     title: str
     rows: tuple[PanelRow, ...]
     compact: bool = False
+    key: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +52,7 @@ class PanelSection:
     priority: int = 50
     role: str = "context"
     compact_rows: tuple[PanelRow, ...] = ()
+    key: str = ""
 
 
 @dataclass(frozen=True, slots=True)

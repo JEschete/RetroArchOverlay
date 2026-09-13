@@ -35,6 +35,7 @@ def default_retroarch_config() -> Path:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Read-only RetroArch information overlay")
+    parser.add_argument("--ui", choices=("tk", "qt"), default="qt")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=55355, type=int)
     parser.add_argument("--retroarch-timeout", default=0.4, type=float)
@@ -53,7 +54,57 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
+def run_overlay_ui(
+    ui: str,
+    client: RetroArchClient,
+    registry: AdapterRegistry,
+    opacity: float,
+    local_settings: LocalPluginSettings,
+    controller: OverlayController,
+) -> int:
+    if ui == "qt":
+        return run_qt_overlay(controller, opacity, local_settings)
+    OverlayWindow(
+        client,
+        registry,
+        opacity,
+        local_settings,
+        controller,
+    ).run()
+    return 0
+
+
+def run_qt_overlay(
+    controller: OverlayController,
+    opacity: float,
+    local_settings: LocalPluginSettings,
+) -> int:
+    if not 0.3 <= opacity <= 1.0:
+        raise ValueError("Opacity must be between 0.3 and 1.0")
+    try:
+        from .presentation.qt import (
+            QtOverlayWindow,
+            apply_qt_theme,
+            create_qt_application,
+        )
+    except ModuleNotFoundError as error:
+        if error.name and error.name.partition(".")[0] == "PySide6":
+            raise RuntimeError(
+                'The Qt UI requires the optional dependency: pip install ".[qt]"'
+            ) from error
+        raise
+    application = create_qt_application()
+    apply_qt_theme(application, local_settings.theme())
+    window = QtOverlayWindow(
+        controller,
+        opacity=opacity,
+        settings=local_settings,
+    )
+    window.start()
+    return application.exec()
+
+
+def main() -> int:
     args = build_parser().parse_args()
     local_settings = LocalPluginSettings()
     configure_logging(
@@ -127,14 +178,15 @@ def main() -> None:
         registry,
         cadence=SnapshotCadence(args.snapshot_interval),
     )
-    OverlayWindow(
+    return run_overlay_ui(
+        args.ui,
         client,
         registry,
         args.opacity,
         local_settings,
         controller,
-    ).run()
+    )
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

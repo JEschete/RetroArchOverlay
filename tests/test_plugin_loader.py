@@ -99,6 +99,25 @@ class RepositoryAdapterTests(unittest.TestCase):
             self.assertIs(first, second)
             self.assertEqual(first.root, repository_root.resolve())
 
+    def test_lifecycle_hooks_delegate_only_after_adapter_is_loaded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository_root = write_repository(root)
+            repository = discover_plugin_repositories((root,)).repositories[0]
+            adapter = RepositoryAdapter(
+                repository, GameContext(repository_root=repository_root)
+            )
+            loaded = Mock()
+
+            adapter.activate(("core", "before-load", "crc"))
+            adapter.deactivate()
+            adapter._adapter = loaded
+            adapter.activate(("core", "game", "crc"))
+            adapter.deactivate()
+
+            loaded.activate.assert_called_once_with(("core", "game", "crc"))
+            loaded.deactivate.assert_called_once_with()
+
     def test_missing_required_source_fails_before_plugin_import(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

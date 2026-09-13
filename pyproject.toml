@@ -14,8 +14,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+qt = [
+	"PySide6-Essentials>=6.11,<6.12",
+]
 dev = [
 	"pytest>=9.0",
+	"pytest-qt>=4.5",
 ]
 
 [project.scripts]
@@ -24,9 +28,25 @@ retroarch-overlay-cheeves = "retroarch_overlay.cheeves:main"
 rao-plugin = "retroarch_overlay.plugin_generator:main"
 retroarch-overlay-manager = "retroarch_overlay.manager_gui:main"
 
+[project.urls]
+Repository = "https://github.com/JEschete/RetroArchOverlay"
+Documentation = "https://github.com/JEschete/RetroArchOverlay/tree/main/docs"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.retroarch-overlay.qt-deployment]
+runtime-distribution = "PySide6-Essentials"
+runtime-modules = ["QtCore", "QtGui", "QtWidgets"]
+test-only-modules = ["QtTest"]
+windows-plugins = [
+	"platforms/qwindows.dll",
+	"styles/qmodernwindowsstyle.dll",
+	"imageformats/qgif.dll",
+	"imageformats/qico.dll",
+	"imageformats/qjpeg.dll",
+]

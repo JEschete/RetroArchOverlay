@@ -32,6 +32,28 @@ def sections_for_role(
     }.get(role, {"area", "context", "urgent"})
     return tuple(section for section in sections if section.role in accepted)
 
+def constrain_window_rect(
+    rect: ScreenRect,
+    work_areas: tuple[ScreenRect, ...],
+    *,
+    minimum_width: int = 280,
+    minimum_height: int = 180,
+) -> ScreenRect:
+    if not work_areas:
+        return rect
+    area = max(
+        work_areas,
+        key=lambda candidate: (
+            _intersection_area(rect, candidate),
+            -_center_distance_squared(rect, candidate),
+        ),
+    )
+    width = min(max(rect.width, minimum_width), area.width)
+    height = min(max(rect.height, minimum_height), area.height)
+    left = min(max(rect.left, area.left), area.right - width)
+    top = min(max(rect.top, area.top), area.bottom - height)
+    return ScreenRect(left, top, left + width, top + height)
+
 
 def compute_companion_layout(
     work_area: ScreenRect,
@@ -95,6 +117,16 @@ def _side_rect(area: ScreenRect, width: int, side: str) -> ScreenRect:
     if side == "left":
         return ScreenRect(area.left, area.top, area.left + width, area.bottom)
     return ScreenRect(area.right - width, area.top, area.right, area.bottom)
+
+def _intersection_area(first: ScreenRect, second: ScreenRect) -> int:
+    width = max(0, min(first.right, second.right) - max(first.left, second.left))
+    height = max(0, min(first.bottom, second.bottom) - max(first.top, second.top))
+    return width * height
+
+def _center_distance_squared(first: ScreenRect, second: ScreenRect) -> int:
+    horizontal = (first.left + first.right) - (second.left + second.right)
+    vertical = (first.top + first.bottom) - (second.top + second.bottom)
+    return horizontal * horizontal + vertical * vertical
 
 
 def _fit_viewport(

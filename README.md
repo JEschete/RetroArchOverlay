@@ -1,6 +1,6 @@
 # RetroArch Overlay
 
-Read-only Tk overlay for RetroArch memory data. Game behavior is loaded from standalone plugin repositories, including Dragon Warrior III and Pokemon Emerald.
+Read-only, plugin-driven overlay for RetroArch memory data. Game behavior is loaded from standalone plugin repositories, including Dragon Warrior III and Pokemon Emerald. PySide6 is the default UI; Tk remains available as an explicit fallback during the game-by-game migration.
 
 ## Smart Layouts
 
@@ -32,11 +32,20 @@ The parent framework is licensed under Apache-2.0 for its explicit patent grant.
 Install the package in editable mode before running the full test suite:
 
 ```powershell
-python -m pip install -e .[dev]
+python -m pip install -e ".[dev,qt]"
 python -m pytest
 ```
 
 The test configuration also adds `src` to `PYTHONPATH`, so focused tests can run from a fresh checkout without installation when their optional runtime dependencies are not needed.
+
+Run the Qt overlay and manager with their normal commands:
+
+```powershell
+retroarch-overlay
+retroarch-overlay-manager
+```
+
+Use `--ui tk` with either GUI command for the temporary Tk fallback. See [docs/QT_PACKAGING.md](docs/QT_PACKAGING.md) for the tested version range, module/plugin allowlist, clean-wheel verifier, recovery steps, and distribution obligations.
 
 ## Pokemon Emerald Plugin
 

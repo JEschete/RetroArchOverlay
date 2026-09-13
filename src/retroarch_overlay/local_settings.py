@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 from pathlib import Path
 
 from .core.models import LayoutProfile, ScreenRect
@@ -59,6 +60,28 @@ class LocalPluginSettings:
             "game_scaling": profile.game_scaling,
             "manage_retroarch_window": profile.manage_retroarch_window,
         }
+        self._write(document)
+
+    def save_overlay_preferences(
+        self,
+        profile: LayoutProfile,
+        theme: str,
+        opacity: float,
+    ) -> None:
+        document = self._document()
+        document["layout_profile"] = {
+            "mode": profile.mode,
+            "rail_side": profile.rail_side,
+            "rail_width": profile.rail_width,
+            "density": profile.density,
+            "game_scaling": profile.game_scaling,
+            "manage_retroarch_window": profile.manage_retroarch_window,
+        }
+        document["theme"] = theme
+        document["overlay_opacity"] = round(
+            max(0.3, min(1.0, float(opacity))),
+            2,
+        )
         self._write(document)
 
     def window_geometry(self, key: str) -> ScreenRect | None:
@@ -142,8 +165,7 @@ class LocalPluginSettings:
             document[title] = trimmed
         else:
             document.pop(title, None)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(document, separators=(",", ":")), encoding="utf-8")
+        _write_json_atomic(path, document, indent=None)
 
     def map_view_state(self, key: str) -> dict[str, object]:
         values = self._document().get("map_view_states", {})
@@ -286,8 +308,42 @@ class LocalPluginSettings:
         return document
 
     def _write(self, document: dict[str, object]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+        _write_json_atomic(self.path, document, indent=2)
+
+
+def _write_json_atomic(
+    path: Path,
+    document: object,
+    *,
+    indent: int | None,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            prefix=f"{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            json.dump(
+                document,
+                temporary,
+                indent=indent,
+                separators=(",", ":") if indent is None else None,
+            )
+            temporary.write("\n")
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+    except BaseException:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def _string(value: object, default: str) -> str:

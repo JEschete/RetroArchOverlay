@@ -1,3 +1,4 @@
+import threading
 import unittest
 from unittest.mock import Mock
 
@@ -12,6 +13,35 @@ from retroarch_overlay.models import OverlaySnapshot, RetroArchStatus
 
 
 class OverlayControllerTests(unittest.TestCase):
+    def test_notifies_adapter_when_active_content_changes_or_stops(self) -> None:
+        first = RetroArchStatus("PLAYING", "core", "First", "11111111")
+        second = RetroArchStatus("PLAYING", "core", "Second", "22222222")
+        idle = RetroArchStatus("MENU")
+        client = Mock()
+        client.get_status.side_effect = (first, second, idle)
+        adapter = Mock()
+        adapter.snapshot.return_value = OverlaySnapshot("Game", "Location", ())
+        registry = Mock()
+        registry.find.return_value = adapter
+        controller = OverlayController(
+            client,
+            registry,
+            verify_content_after_snapshot=False,
+        )
+
+        controller.poll_once(10.0)
+        controller.poll_once(11.0)
+        controller.poll_once(12.0)
+
+        self.assertEqual(
+            adapter.activate.call_args_list,
+            [
+                unittest.mock.call(("core", "First", "11111111")),
+                unittest.mock.call(("core", "Second", "22222222")),
+            ],
+        )
+        self.assertEqual(adapter.deactivate.call_count, 2)
+
     def test_returns_snapshot_when_content_remains_stable(self) -> None:
         status = RetroArchStatus("PLAYING", "core", "Game", "12345678")
         client = Mock()
@@ -23,10 +53,13 @@ class OverlayControllerTests(unittest.TestCase):
         registry.find.return_value = adapter
         controller = OverlayController(client, registry)
 
+        self.assertIsNone(controller.content_key)
+
         result = controller.poll_once(10.0)
 
         self.assertIs(result, snapshot)
         self.assertIs(controller.last_status, status)
+        self.assertEqual(controller.content_key, ("core", "Game", "12345678"))
         adapter.snapshot.assert_called_once_with(client)
 
     def test_discards_snapshot_if_content_changes_during_reads(self) -> None:
@@ -108,6 +141,40 @@ class OverlayControllerTests(unittest.TestCase):
         result = controller.poll_once(10.0)
 
         self.assertIs(result, snapshot)
+
+    def test_background_sink_receives_events_without_ui_queue(self) -> None:
+        status = RetroArchStatus("PLAYING", "core", "Game", "12345678")
+        client = Mock()
+        client.get_status.return_value = status
+        adapter = Mock()
+        snapshot = OverlaySnapshot("Game", "Location", ())
+        adapter.snapshot.return_value = snapshot
+        registry = Mock()
+        registry.find.return_value = adapter
+        received: list[object] = []
+        observed = threading.Event()
+
+        def record(event: object) -> None:
+            received.append(event)
+            observed.set()
+
+        controller = OverlayController(
+            client,
+            registry,
+            poll_interval_seconds=0.01,
+            verify_content_after_snapshot=False,
+            event_sink=record,
+            enqueue_events=False,
+        )
+
+        controller.start()
+        try:
+            self.assertTrue(observed.wait(1.0))
+        finally:
+            controller.stop()
+
+        self.assertEqual(received, [snapshot])
+        self.assertIsNone(controller.drain_latest())
 
     def test_retry_policy_is_exponential_and_bounded(self) -> None:
         policy = RetryPolicy(initial_seconds=0.25, maximum_seconds=1.0)

@@ -54,6 +54,20 @@ class RepositoryAdapter:
         if callable(capture):
             capture(memory)
 
+    def activate(self, content_key: tuple[str, str, str]) -> None:
+        if self._adapter is None:
+            return
+        activate = getattr(self._adapter, "activate", None)
+        if callable(activate):
+            activate(content_key)
+
+    def deactivate(self) -> None:
+        if self._adapter is None:
+            return
+        deactivate = getattr(self._adapter, "deactivate", None)
+        if callable(deactivate):
+            deactivate()
+
     def _load_adapter(self) -> GameAdapter:
         if self._adapter is not None:
             return self._adapter

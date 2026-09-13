@@ -2,12 +2,51 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from retroarch_overlay.local_settings import LocalPluginSettings
 from retroarch_overlay.models import LayoutProfile, ScreenRect
 
 
 class LocalPluginSettingsTests(unittest.TestCase):
+    def test_failed_atomic_replace_preserves_existing_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "local_settings.json"
+            settings = LocalPluginSettings(path)
+            settings.save_theme("light")
+            original = path.read_bytes()
+
+            with (
+                patch(
+                    "retroarch_overlay.local_settings.os.replace",
+                    side_effect=OSError("replace failed"),
+                ),
+                self.assertRaisesRegex(OSError, "replace failed"),
+            ):
+                settings.save_theme("dark")
+
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(tuple(Path(directory).glob("*.tmp")), ())
+
+    def test_failed_hero_path_replace_preserves_existing_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = LocalPluginSettings(Path(directory) / "local_settings.json")
+            settings.save_hero_paths("Game", {"world": [(1, 2)]})
+            path = settings.hero_paths_path()
+            original = path.read_bytes()
+
+            with (
+                patch(
+                    "retroarch_overlay.local_settings.os.replace",
+                    side_effect=OSError("replace failed"),
+                ),
+                self.assertRaisesRegex(OSError, "replace failed"),
+            ):
+                settings.save_hero_paths("Game", {"world": [(3, 4)]})
+
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(tuple(Path(directory).glob("*.tmp")), ())
+
     def test_saves_retroarch_folder_and_resolves_config_outside_repositories(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -120,6 +159,25 @@ class LocalPluginSettingsTests(unittest.TestCase):
 
 
 class ThemeAndRoleTests(unittest.TestCase):
+    def test_overlay_preferences_are_saved_together(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = LocalPluginSettings(Path(directory) / "local_settings.json")
+            profile = LayoutProfile(
+                mode="rail",
+                rail_side="left",
+                rail_width=420,
+                density="normal",
+                game_scaling="integer",
+                manage_retroarch_window=False,
+            )
+
+            settings.save_overlay_preferences(profile, "dark", 0.75)
+
+            reloaded = LocalPluginSettings(settings.path)
+            self.assertEqual(reloaded.layout_profile(), profile)
+            self.assertEqual(reloaded.theme(), "dark")
+            self.assertEqual(reloaded.overlay_opacity(), 0.75)
+
     def test_theme_defaults_to_auto_and_round_trips(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             settings = LocalPluginSettings(Path(directory) / "local_settings.json")

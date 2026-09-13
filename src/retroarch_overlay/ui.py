@@ -11,73 +11,45 @@ from PIL import Image, ImageChops, ImageTk
 from .app.controller import OverlayController, OverlayDiagnostic, SnapshotCadence
 from .adapters.base import AdapterRegistry
 from .core.layout import sections_for_role
-from .infrastructure.accessibility import (
-    windows_dark_mode_enabled,
-    windows_high_contrast_enabled,
+from .core.map import (
+    MIN_MAP_OPACITY,
+    append_map_path,
+    clamp_opacity,
+    clamped_view_origin,
+    map_layer_for_position,
+    map_source_point,
+    map_viewport,
+    project_map_point,
+    record_map_path,
+    tooltip_shift,
+    tracked_map_position,
+    uses_marker_glyph,
+    view_delta,
+    view_origin,
+    waypoint_source_point,
+    wrapped_map_delta,
+)
+from .core.presentation import (
+    filter_caught_sections,
+    filter_detail_rows,
+    preview_section_rows,
 )
 from .infrastructure.logging_config import UIHangWatchdog
 from .models import LayoutProfile, MapDocument, MapLayer, MapOverlay, MapPosition, MapRegion, MapWaypoint, OverlaySnapshot, PanelAction, PanelRow, PanelSection, ScreenRect
 from .local_settings import LocalPluginSettings
 from .presentation.tk.layout import ResponsiveLayoutManager
 from .presentation.tk.layout_dialog import LayoutSettingsDialog
+from .presentation.theme import (
+    THEME_CHOICES,
+    THEME_PALETTES,
+    progress_bar_color,
+    resolve_theme,
+)
 from .retroarch import RetroArchClient
 
 
 LOGGER = logging.getLogger(__name__)
 
-
-THEME_PALETTES: dict[str, dict[str, str]] = {
-    "light": {
-        "background": "#f4f1e8",
-        "surface": "#e6e1d4",
-        "foreground": "#20251f",
-        "muted": "#687064",
-        "accent": "#bb3e2f",
-        "divider": "#cbc8bd",
-        "alert_background": "#ffe9e5",
-        "alert_foreground": "#9d1717",
-        "header_background": "#20251f",
-        "header_foreground": "#ffffff",
-        "success": "#27824a",
-        "warning": "#a86e14",
-        "danger": "#b3261e",
-        "track": "#d8d4c8",
-    },
-    "dark": {
-        "background": "#191d1a",
-        "surface": "#242923",
-        "foreground": "#e6e4dc",
-        "muted": "#9aa294",
-        "accent": "#e0705e",
-        "divider": "#3a4038",
-        "alert_background": "#3c211d",
-        "alert_foreground": "#ff9c8a",
-        "header_background": "#10130f",
-        "header_foreground": "#f2f0e8",
-        "success": "#63c78a",
-        "warning": "#e0ab4e",
-        "danger": "#ef6e64",
-        "track": "#333831",
-    },
-    "high-contrast": {
-        "background": "#ffffff",
-        "surface": "#ffffff",
-        "foreground": "#000000",
-        "muted": "#333333",
-        "accent": "#0046b8",
-        "divider": "#000000",
-        "alert_background": "#ffffff",
-        "alert_foreground": "#a00000",
-        "header_background": "#000000",
-        "header_foreground": "#ffffff",
-        "success": "#00600f",
-        "warning": "#7a4f00",
-        "danger": "#a00000",
-        "track": "#bbbbbb",
-    },
-}
-
-THEME_CHOICES = ("auto", "light", "dark", "high-contrast")
 
 # "all" first and selected by default: the rail shows everything unless the
 # user deliberately narrows it.
@@ -85,38 +57,6 @@ ROLE_TABS = ("all", "area", "party", "goals")
 
 # What a see-through rail rises to while the pointer is over it.
 HOVER_OPACITY = 0.96
-
-
-def resolve_theme(preference: str) -> str:
-    """Map a stored theme preference onto a concrete palette name."""
-    if preference in THEME_PALETTES:
-        return preference
-    if windows_high_contrast_enabled():
-        return "high-contrast"
-    return "dark" if windows_dark_mode_enabled() else "light"
-
-
-def progress_bar_color(
-    fraction: float, palette: dict[str, str], explicit: str = ""
-) -> str:
-    """HP-style semantics when the row does not pick its own bar color."""
-    if explicit:
-        return palette.get(explicit, explicit)
-    if fraction > 0.5:
-        return palette["success"]
-    if fraction > 0.2:
-        return palette["warning"]
-    return palette["danger"]
-
-
-def filter_detail_rows(
-    rows: tuple[PanelRow, ...], needle: str
-) -> tuple[PanelRow, ...]:
-    """Case-insensitive substring filter used by the inline detail search box."""
-    needle = needle.strip().casefold()
-    if not needle:
-        return rows
-    return tuple(row for row in rows if needle in row.text.casefold())
 
 
 def clamp_overlay_size(
@@ -163,162 +103,6 @@ def party_detail_row_role(text: str) -> str:
     return "generic"
 
 
-def filter_caught_sections(
-    sections: tuple[PanelSection, ...], hide_caught: bool
-) -> tuple[PanelSection, ...]:
-    if not hide_caught:
-        return sections
-    return tuple(
-        PanelSection(
-            section.title,
-            tuple(row for row in section.rows if row.caught is not True),
-            section.preview_limit,
-            section.alert,
-            section.actions,
-            section.priority,
-            section.role,
-            tuple(row for row in section.compact_rows if row.caught is not True),
-        )
-        for section in sections
-        if any(row.caught is not True for row in section.rows)
-    )
-
-
-def preview_section_rows(
-    section: PanelSection, expanded: bool
-) -> tuple[tuple[PanelRow, ...], int]:
-    if expanded or section.preview_limit is None:
-        return section.rows, 0
-    visible = section.rows[: section.preview_limit]
-    return visible, len(section.rows) - len(visible)
-
-
-def map_viewport(position: MapPosition, local: bool) -> tuple[int, int, int, int]:
-    if not local and position.is_world:
-        return 0, 0, 255, 255
-    left = (position.x // 16) * 16 - 8
-    top = (position.y // 16) * 16 - 8
-    return left, top, left + 31, top + 31
-
-
-def project_map_point(
-    x: int,
-    y: int,
-    viewport: tuple[int, int, int, int],
-    width: int,
-    height: int,
-    padding: int = 24,
-) -> tuple[float, float]:
-    left, top, right, bottom = viewport
-    usable_width = max(width - padding * 2, 1)
-    usable_height = max(height - padding * 2, 1)
-    return (
-        padding + (x - left) * usable_width / max(right - left, 1),
-        padding + (y - top) * usable_height / max(bottom - top, 1),
-    )
-
-
-def map_source_point(position: MapPosition, layer: MapLayer) -> tuple[int, int]:
-    return (
-        ((position.x + layer.offset_x) % layer.wrap_width) * layer.tile_width
-        + layer.anchor_x,
-        ((position.y + layer.offset_y) % layer.wrap_height) * layer.tile_height
-        + layer.anchor_y,
-    )
-
-
-MIN_MAP_OPACITY = 0.3
-
-
-def uses_marker_glyph(waypoint: MapWaypoint) -> bool:
-    """A waypoint with an explicit marker draws its glyph whatever its kind."""
-    return bool(waypoint.marker) or waypoint.kind == "npcs"
-
-
-def clamp_opacity(value: float) -> float:
-    return max(MIN_MAP_OPACITY, min(1.0, float(value)))
-
-
-def waypoint_source_point(waypoint: MapWaypoint, layer: MapLayer) -> tuple[int, int]:
-    return (
-        ((waypoint.x + layer.offset_x) % layer.wrap_width) * layer.tile_width
-        + layer.anchor_x,
-        ((waypoint.y + layer.offset_y) % layer.wrap_height) * layer.tile_height
-        + layer.anchor_y,
-    )
-
-
-def append_map_path(
-    points: list[tuple[int, int]], point: tuple[int, int], limit: int = 50_000
-) -> None:
-    if points and points[-1] == point:
-        return
-    points.append(point)
-    if len(points) > limit:
-        del points[: len(points) - limit]
-
-
-def record_map_path(
-    document: MapDocument,
-    position: MapPosition,
-    paths: dict[str, list[tuple[int, int]]],
-) -> None:
-    layer = map_layer_for_position(document, position)
-    if layer is not None:
-        append_map_path(
-            paths.setdefault(layer.key, []),
-            map_source_point(position, layer),
-        )
-
-
-def wrapped_map_delta(point: float, center: float, span: int) -> float:
-    return (point - center + span / 2) % span - span / 2
-
-
-def tooltip_shift(
-    bounds: tuple[float, float, float, float],
-    width: float,
-    height: float,
-    margin: float = 6,
-) -> tuple[float, float]:
-    """How far to nudge a tooltip so it stays fully inside the canvas."""
-    left, top, right, bottom = bounds
-    shift_x = 0.0
-    shift_y = 0.0
-    if right + margin > width:
-        shift_x = width - margin - right
-    if left + shift_x < margin:
-        shift_x = margin - left
-    if bottom + margin > height:
-        shift_y = height - margin - bottom
-    if top + shift_y < margin:
-        shift_y = margin - top
-    return shift_x, shift_y
-
-
-def clamped_view_origin(center: float, view_span: int, source_span: int) -> int:
-    """Top/left of a view_span window centred on center, kept inside the image."""
-    if view_span >= source_span:
-        return 0
-    return int(max(0, min(source_span - view_span, round(center - view_span / 2))))
-
-
-def view_origin(
-    center: float, view_span: int, source_span: int, wraps: bool
-) -> int:
-    """Wrapping maps stay centred on the player; the rest clamp at their edges."""
-    if not wraps:
-        return clamped_view_origin(center, view_span, source_span)
-    return int(round(center - view_span / 2)) % max(source_span, 1)
-
-
-def view_delta(coord: float, origin: float, span: int, wraps: bool) -> float:
-    """Distance from the top/left of the view to a point, the short way round."""
-    if not wraps:
-        return coord - origin
-    return (coord - origin) % max(span, 1)
-
-
 def crop_view(
     source: Image.Image,
     left: int,
@@ -331,28 +115,6 @@ def crop_view(
         return source.crop((left, top, left + view_width, top + view_height))
     shifted = ImageChops.offset(source, -left, -top)
     return shifted.crop((0, 0, view_width, view_height))
-
-
-def tracked_map_position(
-    previous: MapPosition | None, current: MapPosition
-) -> MapPosition | None:
-    return current if current.is_world else previous
-
-
-def map_layer_for_position(
-    document: MapDocument, position: MapPosition
-) -> MapLayer | None:
-    if not position.is_world:
-        matching_id = next(
-            (layer for layer in document.layers if layer.map_id == position.map_id),
-            None,
-        )
-        if matching_id is not None:
-            return matching_id
-    return next(
-        (layer for layer in document.layers if layer.map_id is None and layer.area == position.area),
-        None,
-    )
 
 
 class CoordinateMapWindow:
@@ -2790,9 +2552,11 @@ class OverlayWindow:
         self._theme_preference = theme_preference
         self._set_opacity(opacity)
         if self._local_settings is not None:
-            self._local_settings.save_layout_profile(profile)
-            self._local_settings.save_theme(theme_preference)
-            self._local_settings.save_overlay_opacity(opacity)
+            self._local_settings.save_overlay_preferences(
+                profile,
+                theme_preference,
+                opacity,
+            )
         if theme_changed:
             self._apply_theme(resolve_theme(theme_preference))
         if isinstance(self._last_result, OverlaySnapshot):

@@ -4,3 +4,12 @@ Copyright 2026 JEschete
 This product includes software developed for the RetroArch Overlay project.
 Third-party game assets, patches, trademarks, and decompilation references are
 not covered by the project's Apache-2.0 license and retain their own rights.
+
+The optional Qt user interface uses Qt for Python components from The Qt Company:
+PySide6-Essentials, shiboken6, and dynamically linked Qt libraries and plugins.
+Those components are not covered by this project's Apache-2.0 license. Their
+wheel metadata offers LGPL-3.0-only, GPL-2.0-only, GPL-3.0-only, and commercial
+licensing paths. Distributions containing those components must include the
+applicable license texts, copyright and third-party notices, corresponding-source
+information, and relinking rights. Before distribution, see:
+https://github.com/JEschete/RetroArchOverlay/blob/main/docs/QT_PACKAGING.md

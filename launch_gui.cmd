@@ -14,17 +14,17 @@ if not exist ".venv\Scripts\python.exe" (
     if errorlevel 1 goto :bootstrap_failed
 )
 
-".venv\Scripts\python.exe" -c "import keyring; import PIL; import retroarch_overlay" >nul 2>nul
+".venv\Scripts\python.exe" -c "import keyring; import PIL; import PySide6.QtWidgets; import retroarch_overlay" >nul 2>nul
 if errorlevel 1 (
     echo Installing RetroArch Overlay and runtime dependencies...
-    ".venv\Scripts\python.exe" -m pip install -e .
+    ".venv\Scripts\python.exe" -m pip install -e ".[qt]"
     if errorlevel 1 goto :bootstrap_failed
 )
 
 if exist ".venv\Scripts\pythonw.exe" (
-    start "RetroArch Overlay" ".venv\Scripts\pythonw.exe" -m retroarch_overlay.manager_gui
+    start "RetroArch Overlay" ".venv\Scripts\pythonw.exe" -m retroarch_overlay.manager_gui --ui qt
 ) else (
-    ".venv\Scripts\python.exe" -m retroarch_overlay.manager_gui
+    ".venv\Scripts\python.exe" -m retroarch_overlay.manager_gui --ui qt
 )
 exit /b 0
 

@@ -4,6 +4,7 @@ import logging
 import queue
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol, TypeAlias
@@ -104,6 +105,8 @@ class OverlayController:
         cadence: SnapshotCadence | None = None,
         retry_policy: RetryPolicy | None = None,
         verify_content_after_snapshot: bool = True,
+        event_sink: Callable[[ControllerEvent], None] | None = None,
+        enqueue_events: bool = True,
     ) -> None:
         self._client = client
         self._registry = registry
@@ -111,10 +114,14 @@ class OverlayController:
         self._cadence = cadence or SnapshotCadence()
         self._retry_policy = retry_policy or RetryPolicy()
         self._verify_content_after_snapshot = verify_content_after_snapshot
+        self._event_sink = event_sink
+        self._enqueue_events = enqueue_events
         self._results: queue.SimpleQueue[ControllerEvent] = queue.SimpleQueue()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._last_status: RetroArchStatus | None = None
+        self._active_adapter: object | None = None
+        self._active_content_key: tuple[str, str, str] | None = None
         self._metrics = ControllerMetrics()
         self._last_snapshot_seconds = 0.0
 
@@ -125,6 +132,10 @@ class OverlayController:
     @property
     def last_status(self) -> RetroArchStatus | None:
         return self._last_status
+
+    @property
+    def content_key(self) -> tuple[str, str, str] | None:
+        return _content_key(self._last_status) if self._last_status is not None else None
 
     @property
     def metrics(self) -> ControllerMetrics:
@@ -169,6 +180,7 @@ class OverlayController:
 
         current_time = time.monotonic() if now is None else now
         if status.state not in {"PLAYING", "PAUSED"}:
+            self._set_active_adapter(None, None)
             self._cadence.should_snapshot(status, current_time)
             return OverlayDiagnostic(
                 DiagnosticCode.RETROARCH_STATE,
@@ -187,11 +199,13 @@ class OverlayController:
                 str(error),
             )
         if adapter is None:
+            self._set_active_adapter(None, None)
             return OverlayDiagnostic(
                 DiagnosticCode.NO_ADAPTER,
                 "Unsupported game",
                 f"No adapter for {status.core}: {status.content}",
             )
+        self._set_active_adapter(adapter, _content_key(status))
 
         capture = getattr(adapter, "capture", None)
         if status.state == "PLAYING" and not should_snapshot and callable(capture):
@@ -243,6 +257,25 @@ class OverlayController:
                 )
         return snapshot
 
+    def _set_active_adapter(
+        self,
+        adapter: object | None,
+        content_key: tuple[str, str, str] | None,
+    ) -> None:
+        if adapter is self._active_adapter and content_key == self._active_content_key:
+            return
+        previous = self._active_adapter
+        self._active_adapter = adapter
+        self._active_content_key = content_key
+        if previous is not None:
+            deactivate = getattr(previous, "deactivate", None)
+            if callable(deactivate):
+                deactivate()
+        if adapter is not None:
+            activate = getattr(adapter, "activate", None)
+            if callable(activate):
+                activate(content_key)
+
     def _run(self) -> None:
         consecutive_failures = 0
         retry_codes = {
@@ -261,7 +294,13 @@ class OverlayController:
                     str(error),
                 )
             if result is not None:
-                self._results.put(result)
+                if self._event_sink is not None:
+                    try:
+                        self._event_sink(result)
+                    except Exception:
+                        LOGGER.exception("Controller event sink failed")
+                if self._enqueue_events:
+                    self._results.put(result)
             failed = isinstance(result, OverlayDiagnostic) and result.code in retry_codes
             consecutive_failures = consecutive_failures + 1 if failed else 0
             elapsed = time.monotonic() - started_at

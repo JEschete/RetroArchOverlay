@@ -1,6 +1,10 @@
 import unittest
 
-from retroarch_overlay.core.layout import compute_companion_layout, sections_for_role
+from retroarch_overlay.core.layout import (
+    compute_companion_layout,
+    constrain_window_rect,
+    sections_for_role,
+)
 from retroarch_overlay.infrastructure.windows_geometry import _is_retroarch_window
 from retroarch_overlay.models import GameDisplaySpec, LayoutProfile, PanelSection, ScreenRect
 
@@ -51,6 +55,35 @@ class CompanionLayoutTests(unittest.TestCase):
 
         self.assertEqual(layout.mode, "pause-drawer")
         self.assertEqual(layout.primary_panel, ScreenRect(768, 0, 1920, 1080))
+
+
+class WindowRestoreTests(unittest.TestCase):
+    def test_keeps_valid_geometry_on_its_existing_monitor(self) -> None:
+        areas = (
+            ScreenRect(-1920, 0, 0, 1080),
+            ScreenRect(0, 0, 1920, 1040),
+        )
+
+        self.assertEqual(
+            constrain_window_rect(ScreenRect(-1800, 100, -1400, 700), areas),
+            ScreenRect(-1800, 100, -1400, 700),
+        )
+
+    def test_moves_removed_monitor_geometry_to_nearest_available_area(self) -> None:
+        areas = (ScreenRect(0, 0, 1920, 1040),)
+
+        self.assertEqual(
+            constrain_window_rect(ScreenRect(2300, 200, 2700, 800), areas),
+            ScreenRect(1520, 200, 1920, 800),
+        )
+
+    def test_clamps_oversized_window_to_work_area(self) -> None:
+        areas = (ScreenRect(100, 50, 900, 650),)
+
+        self.assertEqual(
+            constrain_window_rect(ScreenRect(-100, -100, 1300, 900), areas),
+            ScreenRect(100, 50, 900, 650),
+        )
 
 
 class WindowsGeometryMatchingTests(unittest.TestCase):

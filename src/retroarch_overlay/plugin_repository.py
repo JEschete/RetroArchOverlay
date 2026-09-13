@@ -107,6 +107,8 @@ def launch_overlay(
         sys.executable,
         "-m",
         "retroarch_overlay.main",
+        "--ui",
+        "qt",
         "--plugin-dir",
         str(plugin_root.resolve()),
     ]

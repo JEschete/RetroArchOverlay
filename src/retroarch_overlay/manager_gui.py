@@ -1,17 +1,20 @@
+import argparse
 import os
 import threading
 import tkinter as tk
 import webbrowser
+from collections.abc import Sequence
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from .adapters import ContentHashResolver
+from .app.tasks import TaskCoordinator
+from .app.ra_credentials import create_ra_client
 from .cheeves import default_cache_dir, default_retroarch_config
 from .core.contracts import PluginRepositoryManifest
-from .infrastructure.credentials import KeyringCredentialStore, load_backlog_timer_credentials
 from .infrastructure.plugin_discovery import discover_plugin_repositories, parse_plugin_manifest
 from .infrastructure.ra_code_notes import code_notes_page_url
-from .infrastructure.retroachievements import RetroAchievementsClient, retroarch_setting
+from .infrastructure.retroachievements import RetroAchievementsClient
 from .local_settings import LocalPluginSettings
 from .plugin_catalog import PluginCatalogEntry, filter_catalog_entries, load_plugin_catalog
 from .plugin_repository import (
@@ -92,10 +95,14 @@ class PluginManagerWindow:
         self._catalog_entries: tuple[PluginCatalogEntry, ...] = ()
         self._catalog_by_label: dict[str, PluginCatalogEntry] = {}
         self._busy = False
+        self._task_coordinator: TaskCoordinator[object] = TaskCoordinator(
+            lambda callback: self.root.after(0, callback)
+        )
         self._configure_style()
         self._build()
         self.refresh()
         self._refresh_catalog()
+        self.root.protocol("WM_DELETE_WINDOW", self._close)
 
     def _configure_style(self) -> None:
         style = ttk.Style()
@@ -794,27 +801,11 @@ class PluginManagerWindow:
 
     def _ra_client(self) -> RetroAchievementsClient:
         config_path = self.local_settings.retroarch_config() or default_retroarch_config()
-        username = retroarch_setting(config_path, "cheevos_username")
-        api_key = os.environ.get("RETROACHIEVEMENTS_API_KEY", "")
-        store = KeyringCredentialStore()
-        if not api_key and username:
-            api_key = store.get(username)
-        if not api_key:
-            backlog_credentials = load_backlog_timer_credentials()
-            if backlog_credentials is not None:
-                username = backlog_credentials.username
-                api_key = backlog_credentials.api_key
-        if not username:
-            raise RuntimeError(
-                "Configure RetroAchievements in RetroArch or the RA Backlog Timer website first"
-            )
-        if not api_key:
-            api_key = prompt_ra_api_key(username).strip()
-            if api_key and store.available:
-                store.set(username, api_key)
-        if not api_key:
-            raise RuntimeError("A RetroAchievements Web API key is required")
-        return RetroAchievementsClient(username, api_key, cache_dir=default_cache_dir())
+        return create_ra_client(
+            config_path,
+            default_cache_dir(),
+            prompt_ra_api_key,
+        )
 
     def _selected_ra_game_id(self) -> int:
         value = self.fields["ra_game_id"].get().strip()
@@ -937,16 +928,14 @@ class PluginManagerWindow:
             return
         self._busy = True
         self.status.set(label)
-
-        def worker() -> None:
-            try:
-                result = operation()  # type: ignore[operator]
-            except Exception as error:
-                self.root.after(0, lambda: self._task_failed(error))
-            else:
-                self.root.after(0, lambda: on_success(result))  # type: ignore[operator]
-
-        threading.Thread(target=worker, daemon=True).start()
+        started = self._task_coordinator.start(
+            label,
+            operation,  # type: ignore[arg-type]
+            on_success,  # type: ignore[arg-type]
+            self._task_failed,
+        )
+        if not started:
+            self._busy = False
 
     def _task_complete(self, message: str, repository: Path) -> None:
         self._busy = False
@@ -1036,6 +1025,10 @@ class PluginManagerWindow:
         self.status.set(str(error))
         messagebox.showerror(title, str(error), parent=self.root)
 
+    def _close(self) -> None:
+        self._task_coordinator.close()
+        self.root.destroy()
+
     def _csv(self, key: str) -> tuple[str, ...]:
         return tuple(value.strip() for value in self.fields[key].get().split(",") if value.strip())
 
@@ -1055,11 +1048,40 @@ class PluginManagerWindow:
         return int(value) if value.strip() else None
 
 
-def main() -> None:
+def build_manager_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="RetroArch Overlay plugin manager")
+    parser.add_argument("--ui", choices=("tk", "qt"), default="qt")
+    return parser
+
+
+def run_manager_ui(ui: str) -> int:
+    if ui == "qt":
+        return run_qt_manager()
     root = tk.Tk()
     PluginManagerWindow(root)
     root.mainloop()
+    return 0
+
+
+def run_qt_manager() -> int:
+    try:
+        from .presentation.qt import QtPluginManagerWindow, create_qt_application
+    except ModuleNotFoundError as error:
+        if error.name and error.name.partition(".")[0] == "PySide6":
+            raise RuntimeError(
+                'The Qt manager requires the optional dependency: pip install ".[qt]"'
+            ) from error
+        raise
+    application = create_qt_application()
+    window = QtPluginManagerWindow()
+    window.show()
+    return application.exec()
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_manager_parser().parse_args(argv)
+    return run_manager_ui(args.ui)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
