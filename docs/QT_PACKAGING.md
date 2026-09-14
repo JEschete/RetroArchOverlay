@@ -65,27 +65,26 @@ Essentials wheel. Add one only after a feature and its test require it.
 
 ## Installation and Commands
 
-Install the optional Qt UI from a published wheel with:
+Install the application from a published wheel with:
 
 ```powershell
-python -m pip install "retroarch-overlay[qt]"
-retroarch-overlay --ui qt
-retroarch-overlay-manager --ui qt
+python -m pip install "retroarch-overlay"
+retroarch-overlay
+retroarch-overlay-manager
 ```
 
 For a source checkout:
 
 ```powershell
-python -m pip install -e ".[dev,qt]"
+python -m pip install -e ".[dev]"
 ```
 
-Qt is the default during coexistence; `--ui tk` selects the temporary fallback.
-The command roles are:
+Qt is the sole graphical runtime. The command roles are:
 
 | Command | Role |
 | --- | --- |
-| `retroarch-overlay` | GUI; Qt default, Tk explicit fallback |
-| `retroarch-overlay-manager` | GUI; Qt default, Tk explicit fallback |
+| `retroarch-overlay` | Qt overlay GUI |
+| `retroarch-overlay-manager` | Qt plugin-manager GUI |
 | `rao-plugin` | CLI-only plugin creation and update |
 | `retroarch-overlay-cheeves` | CLI-only research export |
 
@@ -104,9 +103,9 @@ python tools/verify_qt_package.py --source . --timeout 300
 
 The verifier:
 
-1. builds one wheel and checks its `LICENSE`, `NOTICE`, extras, and four entry points;
+1. builds one wheel and checks its `LICENSE`, `NOTICE`, requirements, and four entry points;
 2. creates a fresh temporary virtual environment;
-3. installs the wheel's `qt` extra and runs `pip check`;
+3. installs the wheel and runs `pip check`;
 4. proves that Essentials and shiboken are installed while Addons and the meta-package are absent;
 5. starts an offscreen `QApplication` outside the source checkout;
 6. invokes all four installed commands with `--help`;
@@ -124,16 +123,16 @@ does not use.
 
 ## License and Notice Requirements
 
-RetroArch Overlay remains Apache-2.0. The optional Qt runtime is separate and is
+RetroArch Overlay remains Apache-2.0. The required Qt runtime is separate and is
 not covered by that license. The selected `PySide6-Essentials` and `shiboken6`
 wheel metadata identifies each as available under
 `LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only`, in addition to Qt's commercial
 licensing path.
 
 The RetroArch Overlay source tree and project wheel do not bundle PySide6,
-shiboken, Qt DLLs, or Qt plugins. They declare an optional dependency that pip
-installs as a separate distribution. The project NOTICE identifies that optional
-runtime and its separate licensing.
+shiboken, Qt DLLs, or Qt plugins. They declare a runtime dependency that pip
+installs as a separate distribution. The project NOTICE identifies that runtime
+and its separate licensing.
 
 If a future distribution contains or redistributes PySide6, shiboken, Qt DLLs,
 or Qt plugins, that artifact must:

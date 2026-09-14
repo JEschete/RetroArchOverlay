@@ -1,6 +1,6 @@
 # Filesystem Plugin Architecture Plan
 
-Status: migration started
+Status: implemented; the application and manager use Qt exclusively
 
 Decision: RetroArch Overlay is a blank application harness. Every game integration is a standalone Git repository loaded directly from the filesystem. A separate trusted catalog manifest advertises available repositories. The startup repository manager may invoke bounded Git clone and fast-forward update operations; Python package publication, wheel distribution, `pipx` injection, namespace packages, and Python entry points are outside the design.
 
@@ -8,17 +8,17 @@ Implemented in the first slice:
 
 - dependency-free core RA and snapshot/protocol models with compatibility re-exports
 - shared keyring credential store under `infrastructure`
-- Tk API-key prompt under `presentation/tk`
+- Qt API-key prompt under `presentation/qt`
 - RA HTTP/config implementation under `infrastructure`
 - an initial internal sibling-folder discovery prototype with isolated failures; this must be replaced by external repository discovery
 - external `plugin.toml` repository discovery with strict validation and isolated lazy loading
 - Pokemon Emerald extracted to `JEschete/RAO_pokeemerald` with `pret/pokeemerald` pinned under `decomp_reference/pokeemerald`
-- shared CLI and Tk manager for creating and updating uniform `RAO_<game>` plugin repositories
+- shared CLI and Qt manager for creating and updating uniform `RAO_<game>` plugin repositories
 - Emerald code, tests, and game-specific resources removed from the core repository
 - architecture tests for the first game/core import rules
 - hash-driven, public-Web-API achievement research export with offline saved-page memory-note import
 
-Still pending: extracting Dragon Warrior III into `RAO_dragonwarrior3`, generic map documents, the catalog-backed startup repository manager, controller/UI separation, and removal of remaining compatibility modules.
+The standalone plugin extraction, generic presentation contracts, catalog-backed repository manager, controller/UI separation, and compatibility-module removal are complete.
 
 ## Goal
 
@@ -41,7 +41,7 @@ All source-controlled game knowledge must live in that plugin repository. This i
 7. A plugin may pin a game decomp under `decomp_reference/` as a Git submodule. `git clone --recurse-submodules` is the standard acquisition path for such plugins.
 8. A plugin import must not require its submodules. Submodule/data validation occurs only when matching content causes lazy adapter construction.
 9. Keep all communication between a plugin and the application in shared, immutable data contracts.
-10. Keep Tk, sockets, HTTP, keyring, filesystem search, and command-line parsing out of plugin domain modules.
+10. Keep GUI toolkits, sockets, HTTP, keyring, filesystem search, and command-line parsing out of plugin domain modules.
 11. Keep every source-controlled game asset inside the owning plugin repository and resolve it relative to that repository root.
 12. A missing, incomplete, or broken plugin must not prevent the blank harness or another plugin from starting.
 13. Preserve compatibility imports during extraction, then remove all game code from the core repository.
@@ -55,7 +55,7 @@ flowchart TD
     Main[main.py] --> App[app bootstrap and controller]
     App --> Core[core contracts and models]
     App --> Infra[infrastructure services]
-    App --> UI[presentation/tk]
+    App --> UI[presentation/qt]
     App --> Discovery[filesystem plugin discovery]
     Discovery --> Manifest[plugin repo: plugin.toml]
     Discovery --> Plugin[plugin repo: plugin.py]
@@ -74,7 +74,7 @@ The following imports are forbidden:
 - `presentation` importing a named plugin.
 - `app` importing a named plugin.
 - One plugin importing another plugin.
-- A plugin importing Tk, keyring, socket, or application HTTP implementations.
+- A plugin importing a GUI toolkit, keyring, socket, or application HTTP implementations.
 - Shared code containing a path to a named game's assets.
 - The core repository containing a ROM hash, memory address, achievement ID, map calibration, game title alias, or decomp rule.
 
@@ -109,10 +109,10 @@ RetroArchOverlay/                         # main/core Git repository
             credentials.py
             app_paths.py
         presentation/
-            tk/
-                overlay.py
-                details.py
-                maps.py
+            qt/
+                overlay_window.py
+                panel_document_view.py
+                map_window.py
                 credentials.py
     tests/
         architecture/
@@ -158,7 +158,7 @@ Core must depend only on the Python standard library. It cannot know which games
 - converts exceptions into diagnostic events
 - sends immutable render models to the UI
 
-The polling thread currently inside `OverlayWindow` moves to `app/controller.py`. The Tk renderer should receive events and render them; it should not own sockets, registry selection, or retry policy.
+The polling controller lives in `app/controller.py`. The Qt renderer receives events and renders them; it does not own sockets, registry selection, or retry policy.
 
 ### Infrastructure
 
@@ -174,7 +174,7 @@ Infrastructure implements core protocols. It must not contain game IDs, ROM hash
 
 ### Presentation
 
-`presentation/tk` renders generic documents:
+`presentation/qt` renders generic documents:
 
 - overlay snapshots
 - section actions
@@ -187,7 +187,7 @@ The renderer may style a semantic state such as `alert`, `complete`, or `unavail
 
 ### Plugins
 
-Each standalone plugin repository owns one game's complete behavior and source-controlled data. It may import core contracts and service protocols exposed through the plugin context, but not service implementations or Tk widgets.
+Each standalone plugin repository owns one game's complete behavior and source-controlled data. It may import core contracts and service protocols exposed through the plugin context, but not service implementations or GUI widgets.
 
 ## Plugin Repository Contract
 
@@ -311,7 +311,7 @@ class GamePlugin(Protocol):
 PLUGIN: GamePlugin
 ```
 
-`GameContext` provides the repository root, resolved namespaced settings, shared service protocols, and lazy RA progress access. It does not expose Tk widgets or infrastructure implementations.
+`GameContext` provides the repository root, resolved namespaced settings, shared service protocols, and lazy RA progress access. It does not expose GUI widgets or infrastructure implementations.
 
 Rules for `plugin.py`:
 
@@ -474,7 +474,7 @@ MapDocument
     viewport
 ```
 
-Plugins construct these shared documents. The Tk layer decides how to render them. Do not allow plugins to pass callables, Tk classes, or arbitrary widget factories through the contract.
+Plugins construct these shared documents. The Qt layer decides how to render them. Do not allow plugins to pass callables, widget classes, or arbitrary widget factories through the contract.
 
 The existing Dragon Warrior III map window must become a generic map renderer. The following currently game-specific UI facts move into the Dragon Warrior III repository:
 
@@ -587,7 +587,7 @@ Split the current combined RA module into:
 - core `RAProgress` model and provider protocol
 - infrastructure HTTP client
 - infrastructure credential store
-- Tk credential prompt
+- Qt credential prompt
 
 `GameContext` exposes a lazy `RAProgressProvider`. A plugin requests progress using its own manifest's `ra_game_id`. `main.py` must not call `load_ra_progress` once per named game.
 
@@ -655,7 +655,7 @@ Add AST-based tests that fail when:
 
 1. shared code imports a named plugin directly
 2. one plugin imports another plugin
-3. a plugin imports Tk, keyring, socket, urllib, requests, or application infrastructure implementations
+3. a plugin imports a GUI toolkit, keyring, socket, urllib, requests, or application infrastructure implementations
 4. `main.py` contains named adapter construction
 5. `presentation/` contains a named game asset path
 6. a plugin repository lacks valid `plugin.toml`, `plugin.py`, or `PLUGIN`
@@ -802,20 +802,20 @@ Exit criteria:
 - Repeated install or update clicks cannot start duplicate Git operations for one repository.
 - Adding a catalog entry requires no core repository change.
 
-### Phase 6: Separate Controller, Infrastructure, and Tk
+### Phase 6: Separate Controller, Infrastructure, and Presentation
 
 1. Move RetroArch transport to `infrastructure/retroarch.py`.
 2. Move content hashing to `infrastructure/content_hashes.py`.
 3. Split RA HTTP, credential storage, and credential UI.
 4. Move polling, retry, and adapter selection from `OverlayWindow` to `app/controller.py`.
 5. Have the controller publish snapshot or diagnostic events through a small protocol.
-6. Split the Tk overlay, details, maps, and credentials into separate modules.
+6. Split the overlay, details, maps, and credentials into separate presentation modules.
 7. Make plugin discovery, matching, loading, and construction controller events with typed diagnostics.
 
 Exit criteria:
 
 - UI tests use events/documents and do not need a RetroArch client.
-- Controller tests use fake gateways and do not construct Tk.
+- Controller tests use fake gateways and do not construct GUI widgets.
 - Plugins import only core contracts and protocols.
 
 ### Phase 7: Enforce the Repository Contract
@@ -901,7 +901,7 @@ The migration is complete only when all are true:
 - One plugin's malformed manifest, import failure, missing submodule, or construction failure does not block another plugin.
 - Adapters are constructed lazily and cached per session.
 - Plugin Python is not imported before manifest matching selects it.
-- Plugins do not import Tk or infrastructure implementations.
+- Plugins do not import GUI toolkits or infrastructure implementations.
 - Raw memory decoding and snapshot presentation are separately testable.
 - Emerald's plugin repository pins `pokeemerald` as a submodule and validates it only when Emerald activates.
 - `git clone --recurse-submodules` produces a complete decomp-backed plugin checkout.

@@ -2,6 +2,9 @@ from .application import create_qt_application
 from .controller_bridge import ControllerEventBridge
 from .dashboard_window import (
     QtDashboardCardsView,
+    QtDashboardControlBar,
+    QtDashboardImageCache,
+    QtDashboardPlot,
     QtDashboardMapView,
     QtDashboardOverviewView,
     QtDashboardRecordsView,
@@ -57,6 +60,9 @@ from .overlay_window import QtOverlayWindow
 __all__ = [
     "ControllerEventBridge",
     "QtDashboardCardsView",
+    "QtDashboardControlBar",
+    "QtDashboardImageCache",
+    "QtDashboardPlot",
     "QtDashboardMapView",
     "QtDashboardOverviewView",
     "QtDashboardRecordsView",

@@ -266,6 +266,52 @@ def test_player_visibility_updates_existing_items(qtbot, tmp_path: Path) -> None
     assert player.isVisible()
 
 
+def test_player_blinks_by_default_on_full_map_and_stops_when_hidden(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    path = _image(tmp_path / "world.png")
+    layer = MapLayer("world", "World", "Outside", path)
+    view = QtMapView(MapDocument("Map", (layer,)))
+    qtbot.addWidget(view)
+    view.show()
+    view.update_map(MapPosition("Outside", 0, 1, 1, True))
+    player = view._player_items[0]
+
+    assert view.player_blink_enabled
+    assert view.player_timer_active
+    assert player.isVisible()
+
+    view._toggle_player_blink()
+
+    assert not player.isVisible()
+    view.hide()
+    assert not view.player_timer_active
+    assert player.isVisible()
+
+
+def test_hiding_player_stops_blink_until_player_is_enabled(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    path = _image(tmp_path / "world.png")
+    layer = MapLayer("world", "World", "Outside", path)
+    view = QtMapView(MapDocument("Map", (layer,)))
+    qtbot.addWidget(view)
+    view.show()
+    view.update_map(MapPosition("Outside", 0, 1, 1, True))
+
+    view.set_overlay_visible("player", False)
+
+    assert not view.player_timer_active
+    assert not view._player_items[0].isVisible()
+
+    view.set_overlay_visible("player", True)
+
+    assert view.player_timer_active
+    assert view._player_items[0].isVisible()
+
+
 def test_hero_path_appends_without_rebuilding_existing_chunks(qtbot, tmp_path: Path) -> None:
     path = _image(tmp_path / "world.png")
     paths = {"world": [(8, 8), (16, 8)]}

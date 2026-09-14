@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .application import create_qt_application
+
 
 class QtApiKeyDialog(QDialog):
     def __init__(self, username: str, parent: QWidget | None = None) -> None:
@@ -62,5 +64,8 @@ class QtApiKeyDialog(QDialog):
 
 
 def prompt_ra_api_key(username: str, parent: QWidget | None = None) -> str:
+    application = create_qt_application()
     dialog = QtApiKeyDialog(username, parent)
-    return dialog.api_key if dialog.exec() == QDialog.DialogCode.Accepted else ""
+    result = dialog.api_key if dialog.exec() == QDialog.DialogCode.Accepted else ""
+    application.processEvents()
+    return result

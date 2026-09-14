@@ -133,6 +133,7 @@ class QtMapWindow(QWidget):
             document,
             hero_paths=hero_paths,
             animate_objectives=animate_objectives,
+            blink_player=True,
             parent=self,
         )
         overlay_columns = 4

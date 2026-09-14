@@ -17,8 +17,8 @@ class UIHangWatchdogTests(unittest.TestCase):
                 repeat_seconds=10.0,
                 clock=lambda: clock[0],
             )
-            watchdog.heartbeat("Tk event loop idle")
-            watchdog.set_context("map=world stage=full-redraw-photoimage")
+            watchdog.heartbeat("UI event loop idle")
+            watchdog.set_context("map=world stage=full-redraw")
             clock[0] = 13.1
 
             with patch.object(watchdog, "_thread_dump", return_value="thread stack"):
@@ -27,7 +27,7 @@ class UIHangWatchdogTests(unittest.TestCase):
             self.assertTrue(captured)
             text = report.read_text(encoding="utf-8")
             self.assertIn("UI HANG DETECTED", text)
-            self.assertIn("map=world stage=full-redraw-photoimage", text)
+            self.assertIn("map=world stage=full-redraw", text)
             self.assertIn("thread stack", text)
 
     def test_heartbeat_rearms_watchdog_after_report(self) -> None:

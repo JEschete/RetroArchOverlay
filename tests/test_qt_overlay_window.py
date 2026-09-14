@@ -361,6 +361,13 @@ def test_real_settings_restore_legacy_state_and_save_qt_geometry(
     assert reloaded.window_geometry("main") == ScreenRect(40, 50, 400, 700)
 
 
+def test_overlay_is_topmost_by_default(qtbot) -> None:
+    window = QtOverlayWindow(StubController())
+    qtbot.addWidget(window)
+
+    assert window.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+
+
 class GeometryProvider:
     def __init__(self, geometry: WindowGeometry) -> None:
         self.geometry = geometry
@@ -414,12 +421,37 @@ def test_live_rail_layout_restores_retroarch_and_preserves_unmanaged_geometry(
 
     assert manager.current is not None
     assert manager.current.mode == "rail"
-    assert window.geometry().getRect() == (1560, 0, 360, 1080)
+    assert window.frameGeometry().getRect() == (1560, 0, 360, 1080)
     assert provider.placements[0][0] == 42
     window.close()
 
     assert provider.placements[-1] == (42, ScreenRect(95, 70, 1605, 990))
     assert LocalPluginSettings(settings.path).window_geometry("main-qt") == original_qt
+
+
+def test_dragging_managed_overlay_undocks_and_preserves_manual_geometry(
+    qtbot,
+) -> None:
+    provider = GeometryProvider(_window_geometry(resizable=True))
+    manager = QtResponsiveLayoutManager(LayoutProfile(mode="auto"), provider)
+    controller = StubController()
+    controller.content_key = ("core", "game", "crc")
+    controller.last_status = RetroArchStatus("PLAYING", "core", "game", "crc")
+    window = QtOverlayWindow(controller, layout_manager=manager)
+    qtbot.addWidget(window)
+    window.show()
+    window.render_event(
+        replace(_snapshot(), display_spec=GameDisplaySpec("nes", 256, 240))
+    )
+
+    window.header.drag_started.emit()
+    window.move(80, 90)
+    window._refresh_layout()
+
+    assert manager.current is None
+    assert window._manual_layout_override
+    assert window.frameGeometry().topLeft().x() == 80
+    assert provider.placements[-1] == (42, ScreenRect(95, 70, 1605, 990))
 
 
 def test_dual_strip_layout_renders_compact_secondary_window(qtbot) -> None:

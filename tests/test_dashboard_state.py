@@ -23,6 +23,38 @@ def _documents(tmp_path) -> DashboardStore:
                         {"value": "underworld", "label": "Underworld"},
                     ],
                 }
+                ,
+                {
+                    "key": "enabled",
+                    "workspace": "records",
+                    "label": "Enabled",
+                    "kind": "toggle",
+                    "default": False,
+                    "status_key": "worker",
+                },
+                {
+                    "key": "revealed",
+                    "workspace": "records",
+                    "label": "Revealed",
+                    "kind": "counter",
+                    "default": 0,
+                    "minimum": 0,
+                    "maximum": 3,
+                    "step": 1,
+                },
+                {
+                    "key": "selected",
+                    "workspace": "records",
+                    "label": "Selection",
+                    "kind": "record",
+                },
+                {
+                    "key": "run",
+                    "workspace": "records",
+                    "label": "Run",
+                    "kind": "command",
+                    "status_key": "worker",
+                },
             ],
         },
     }
@@ -109,3 +141,40 @@ def test_unsupported_documents_do_not_replace_last_valid_state(tmp_path) -> None
     assert not store.refresh()
     assert len(store.workspaces) == 2
     assert "Unsupported static dashboard schema" in store.errors["static"]
+
+
+def test_toggles_counters_records_and_commands_are_validated(tmp_path) -> None:
+    store = _documents(tmp_path)
+
+    assert store.set_toggle("enabled", True)
+    assert not store.set_toggle("missing", True)
+    assert store.set_counter("revealed", 99)
+    assert store.controls["revealed"] == 3
+    assert store.set_record_selection("selected", "record-one", {"record-one"})
+    assert not store.set_record_selection("selected", "other", {"record-one"})
+    assert store.invoke_command("run", {"record": "record-one"})
+    assert not store.invoke_command("missing")
+
+    persisted = json.loads(store.controls_path.read_text(encoding="utf-8"))
+    assert persisted["enabled"] is True
+    assert persisted["selected"] == "record-one"
+    assert persisted["commands"]["run"] == {
+        "serial": 1,
+        "payload": {"record": "record-one"},
+    }
+
+
+def test_service_status_is_loaded_separately_from_controls(tmp_path) -> None:
+    store = _documents(tmp_path)
+    store.status_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "services": {"worker": "Ready"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert store.refresh()
+    assert store.service_statuses == {"worker": "Ready"}

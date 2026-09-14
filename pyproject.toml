@@ -11,12 +11,10 @@ license = "Apache-2.0"
 dependencies = [
 	"keyring>=25.0",
 	"Pillow>=11.0",
+	"PySide6-Essentials>=6.11,<6.12",
 ]
 
 [project.optional-dependencies]
-qt = [
-	"PySide6-Essentials>=6.11,<6.12",
-]
 dev = [
 	"pytest>=9.0",
 	"pytest-qt>=4.5",

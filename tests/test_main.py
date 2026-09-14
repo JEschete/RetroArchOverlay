@@ -1,56 +1,27 @@
 from unittest.mock import Mock, patch
 
-from retroarch_overlay.main import build_parser, run_overlay_ui
+import pytest
+
+from retroarch_overlay.main import build_parser, run_qt_overlay
 
 
-def test_parser_defaults_to_qt_and_retains_explicit_tk_fallback() -> None:
-    assert build_parser().parse_args([]).ui == "qt"
-    assert build_parser().parse_args(["--ui", "tk"]).ui == "tk"
+def test_parser_rejects_removed_ui_selector() -> None:
+    assert not hasattr(build_parser().parse_args([]), "ui")
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["--ui"])
 
 
-@patch("retroarch_overlay.main.run_qt_overlay", return_value=17)
-@patch("retroarch_overlay.main.OverlayWindow")
-def test_qt_dispatch_does_not_construct_tk_window(
-    overlay_window: Mock,
-    run_qt_overlay: Mock,
-) -> None:
-    client = Mock()
-    registry = Mock()
+def test_qt_overlay_starts_window() -> None:
     settings = Mock()
     settings.theme.return_value = "dark"
     controller = Mock()
-
-    result = run_overlay_ui(
-        "qt", client, registry, 0.8, settings, controller
-    )
+    with patch("retroarch_overlay.presentation.qt.create_qt_application") as create:
+        with patch("retroarch_overlay.presentation.qt.apply_qt_theme") as apply_theme:
+            with patch("retroarch_overlay.presentation.qt.QtOverlayWindow") as window_type:
+                create.return_value.exec.return_value = 17
+                result = run_qt_overlay(controller, 0.8, settings)
 
     assert result == 17
-    run_qt_overlay.assert_called_once_with(controller, 0.8, settings)
-    overlay_window.assert_not_called()
-
-
-@patch("retroarch_overlay.main.run_qt_overlay")
-@patch("retroarch_overlay.main.OverlayWindow")
-def test_tk_dispatch_preserves_existing_constructor_and_run(
-    overlay_window: Mock,
-    run_qt_overlay: Mock,
-) -> None:
-    client = Mock()
-    registry = Mock()
-    settings = Mock()
-    controller = Mock()
-
-    result = run_overlay_ui(
-        "tk", client, registry, 1.0, settings, controller
-    )
-
-    assert result == 0
-    overlay_window.assert_called_once_with(
-        client,
-        registry,
-        1.0,
-        settings,
-        controller,
-    )
-    overlay_window.return_value.run.assert_called_once_with()
-    run_qt_overlay.assert_not_called()
+    apply_theme.assert_called_once_with(create.return_value, "dark")
+    window_type.assert_called_once_with(controller, opacity=0.8, settings=settings)
+    window_type.return_value.start.assert_called_once_with()

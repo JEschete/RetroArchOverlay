@@ -1,6 +1,6 @@
 # RetroArch Overlay
 
-Read-only, plugin-driven overlay for RetroArch memory data. Game behavior is loaded from standalone plugin repositories, including Dragon Warrior III and Pokemon Emerald. PySide6 is the default UI; Tk remains available as an explicit fallback during the game-by-game migration.
+Read-only, plugin-driven PySide6 overlay for RetroArch memory data. Game behavior is loaded from standalone plugin repositories, including Pokemon Red, Dragon Warrior III, Dragon Warrior IV, Pokemon Emerald, and Vagrant Story.
 
 ## Smart Layouts
 
@@ -14,6 +14,21 @@ Installed plugins declare their native display geometry. On Windows, the overlay
 - 4:3 content remains aspect-correct and uses the wider side space available on 16:9 monitors.
 
 Use the gear button in the overlay header to choose Auto, Rail, Dual Strips, or Overlay mode; rail side and width; compact or normal density; integer or fit scaling; emulator-window management; the theme; and rail opacity. Themes are Auto, Light, Dark, or High Contrast; Auto follows the Windows app theme and is overridden by the system high-contrast setting. The rail is fully opaque by default; lowering opacity makes it see-through while idle and it lifts toward legible on hover. Layout, theme, opacity, the active rail tab per game, and main/map window geometry are saved under `%LOCALAPPDATA%/RetroArchOverlay/local_settings.json`.
+
+The overlay stays above the focused game by default. Automatic placement fits
+the complete native window frame inside the desktop work area, including its
+title bar. Dragging or resizing an automatically docked overlay undocks it for
+the session and preserves the manual position instead of snapping it back.
+
+Generic companion dashboards start as a right-side rail sized to the available
+desktop height. They can be resized to 420 pixels wide; at narrow widths the
+workspace sidebar becomes a header selector, controls wrap into rows, and map
+and record detail panes stack vertically. Drag either the overlay or companion
+header to move its window.
+
+The player indicator blinks on every map surface: full maps, minimaps, embedded
+companion maps, and map popouts. The shared timer pauses while a map or player
+layer is hidden and restores the marker before the map is shown again.
 
 The rail tabs are All, Area, Party, and Goals. All is the default and shows every section in one scroll; the others narrow it to that role, with urgent sections always kept visible.
 
@@ -32,7 +47,7 @@ The parent framework is licensed under Apache-2.0 for its explicit patent grant.
 Install the package in editable mode before running the full test suite:
 
 ```powershell
-python -m pip install -e ".[dev,qt]"
+python -m pip install -e ".[dev]"
 python -m pytest
 ```
 
@@ -45,7 +60,7 @@ retroarch-overlay
 retroarch-overlay-manager
 ```
 
-Use `--ui tk` with either GUI command for the temporary Tk fallback. See [docs/QT_PACKAGING.md](docs/QT_PACKAGING.md) for the tested version range, module/plugin allowlist, clean-wheel verifier, recovery steps, and distribution obligations.
+See [docs/QT_PACKAGING.md](docs/QT_PACKAGING.md) for the tested version range, module/plugin allowlist, clean-wheel verifier, recovery steps, and distribution obligations.
 
 ## Pokemon Emerald Plugin
 
@@ -71,7 +86,7 @@ Review [DMCA_AUDIT.md](DMCA_AUDIT.md) and each plugin's rights/provenance report
 
 Run `launch_gui.cmd` to create its virtual environment when needed, install missing runtime dependencies, and open the manager. The Available games picker loads the trusted `JEschete/RAO_catalog` manifest, marks installed games, and clones a selected game only after Install is pressed. Its live search filters case-insensitively across game names, slugs, and plugin IDs, supports multiple search terms, and can be cleared to restore the full catalog. The last valid catalog is cached under `%LOCALAPPDATA%/RetroArchOverlay` for offline use. `RETROARCH_OVERLAY_CATALOG` may select another trusted HTTPS catalog URL or local catalog file, and Install from URL remains available for an explicitly supplied third-party repository. Catalog installs verify the cloned plugin ID and slug before accepting the checkout.
 
-The manager can inspect and edit manifests, retain a machine-local path to each ROM without copying it into a repository, apply clean fast-forward updates, synchronize submodules, delete plugins with confirmation, discover public RetroAchievements game metadata and supported hashes, import saved authenticated code-note pages, open repositories, and start the overlay. The global Settings command in the application header accepts the local RetroArch installation folder containing `retroarch.cfg`; it is independent of plugin selection. Settings also has an **Enable RetroArch network commands** checkbox. Save the setting and restart RetroArch after changing it. Discovery uses the RetroAchievements console name to populate stable platform aliases and enriches them with matching installed cores found under the selected installation's `info` folder. Local ROM and RetroArch paths are stored outside Git in `%LOCALAPPDATA%/RetroArchOverlay/local_settings.json`. The same template operations are available without Tk:
+The manager can inspect and edit manifests, retain a machine-local path to each ROM without copying it into a repository, apply clean fast-forward updates, synchronize submodules, delete plugins with confirmation, discover public RetroAchievements game metadata and supported hashes, import saved authenticated code-note pages, open repositories, and start the overlay. The global Settings command in the application header accepts the local RetroArch installation folder containing `retroarch.cfg`; it is independent of plugin selection. Settings also has an **Enable RetroArch network commands** checkbox. Save the setting and restart RetroArch after changing it. Discovery uses the RetroAchievements console name to populate stable platform aliases and enriches them with matching installed cores found under the selected installation's `info` folder. Local ROM and RetroArch paths are stored outside Git in `%LOCALAPPDATA%/RetroArchOverlay/local_settings.json`. The same template operations are available from the CLI:
 
 ```powershell
 rao-plugin create `

@@ -46,6 +46,7 @@ from .overlay_settings_dialog import QtOverlaySettingsDialog
 from .panel_document_view import PanelDocumentView
 from .secondary_window import QtSecondaryPanelWindow
 from .theme import apply_qt_theme
+from .window_drag import QtWindowDragHandle
 from ..theme import THEME_PALETTES
 from .window_state import (
     WindowPresentation,
@@ -124,6 +125,7 @@ class QtOverlayWindow(QMainWindow):
         self._closed = False
         self._collapsed = False
         self._applying_layout_geometry = True
+        self._manual_layout_override = False
         self._last_snapshot: OverlaySnapshot | None = None
         self._last_content_scope = ""
         self._secondary_window: QtSecondaryPanelWindow | None = None
@@ -143,7 +145,7 @@ class QtOverlayWindow(QMainWindow):
         stored_opacity = settings.overlay_opacity() if settings is not None else None
         resolved_opacity = stored_opacity if stored_opacity is not None else opacity
         presentation = replace(
-            presentation or WindowPresentation(),
+            presentation or WindowPresentation(always_on_top=True),
             opacity=resolved_opacity,
         )
         apply_window_presentation(self, presentation)
@@ -154,13 +156,15 @@ class QtOverlayWindow(QMainWindow):
         layout.setSpacing(0)
         self.setCentralWidget(central)
 
-        self.header = QFrame(central)
+        self.header = QtWindowDragHandle(central)
+        self.header.drag_started.connect(self._begin_manual_move)
         header_layout = QVBoxLayout(self.header)
         header_layout.setContentsMargins(12, 10, 12, 8)
         header_layout.setSpacing(2)
         title_layout = QHBoxLayout()
         title_layout.setContentsMargins(0, 0, 0, 0)
         self.game_label = QLabel("RETROARCH OVERLAY", self.header)
+        self.game_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.game_label.setAccessibleDescription("Active game")
         title_layout.addWidget(self.game_label, 1)
         self.settings_button = QPushButton("Settings", self.header)
@@ -168,6 +172,7 @@ class QtOverlayWindow(QMainWindow):
         self.settings_button.clicked.connect(self._show_overlay_settings)
         title_layout.addWidget(self.settings_button)
         self.location_label = QLabel("Waiting for RetroArch", self.header)
+        self.location_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.location_label.setWordWrap(True)
         self.location_label.setAccessibleDescription("Current location or status")
         header_layout.addLayout(title_layout)
@@ -481,6 +486,7 @@ class QtOverlayWindow(QMainWindow):
     ) -> None:
         if self._settings is not None:
             self._settings.save_overlay_preferences(profile, theme, opacity)
+        self._manual_layout_override = False
         self._layout_manager.deactivate()
         self._layout_manager.profile = profile
         self._overlay_opacity = opacity
@@ -490,12 +496,24 @@ class QtOverlayWindow(QMainWindow):
 
     def moveEvent(self, event: QMoveEvent) -> None:
         super().moveEvent(event)
+        self._begin_manual_move()
         self._remember_unmanaged_geometry()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
+        self._begin_manual_move()
         self._remember_unmanaged_geometry()
         self.toast_queue.reposition()
+
+    def _begin_manual_move(self) -> None:
+        if self._applying_layout_geometry or not hasattr(self, "_layout_manager"):
+            return
+        current = self._layout_manager.current
+        if current is None or current.mode not in MANAGED_PRIMARY_MODES:
+            return
+        self._layout_manager.deactivate()
+        self._manual_layout_override = True
+        self._hide_secondary_window()
 
     def _toggle_collapsed(self) -> None:
         self._collapsed = not self._collapsed
@@ -579,6 +597,9 @@ class QtOverlayWindow(QMainWindow):
     def _refresh_layout(self) -> None:
         snapshot = self._last_snapshot
         if self._collapsed:
+            self._hide_secondary_window()
+            return
+        if self._manual_layout_override:
             self._hide_secondary_window()
             return
         if snapshot is None or snapshot.display_spec is None:

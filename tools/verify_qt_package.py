@@ -100,9 +100,13 @@ def _verify_wheel_contents(wheel: Path) -> None:
         for requirement in requirements
         if requirement.startswith("PySide6-Essentials")
     )
-    if len(qt_requirements) != 1 or not all(
-        fragment in qt_requirements[0]
-        for fragment in (">=6.11", "<6.12", 'extra == "qt"')
+    if (
+        len(qt_requirements) != 1
+        or not all(
+            fragment in qt_requirements[0]
+            for fragment in (">=6.11", "<6.12")
+        )
+        or "extra ==" in qt_requirements[0]
     ):
         raise RuntimeError(
             f"Built wheel has unexpected Qt requirements: {qt_requirements}"
@@ -267,7 +271,7 @@ def verify(source_root: Path, timeout: int) -> dict[str, object]:
         )
         python = _venv_python(environment_root)
         _run(
-            (str(python), "-m", "pip", "install", f"{wheel}[qt]"),
+            (str(python), "-m", "pip", "install", str(wheel)),
             cwd=temporary_root,
             timeout=timeout,
         )
@@ -340,7 +344,7 @@ def verify(source_root: Path, timeout: int) -> dict[str, object]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Build and verify the optional Qt wheel in an isolated environment"
+        description="Build and verify the Qt wheel in an isolated environment"
     )
     parser.add_argument(
         "--source",

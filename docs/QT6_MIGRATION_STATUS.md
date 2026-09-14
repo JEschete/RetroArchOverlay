@@ -1,6 +1,6 @@
 # Qt 6 Migration Status
 
-Status: Revised base Qt gate, Pokemon Red, Dragon Warrior III, and Dragon Warrior IV complete; Pokemon Emerald remains pending
+Status: Complete; the base and all five plugins are Qt-only and the final compatibility, packaging, and removal gates pass
 
 Started: 2026-09-12
 
@@ -17,11 +17,11 @@ Selected binding: PySide6 for the Python source/wheel runtime. Standalone packag
 - Automated Qt platform: `offscreen`
 - Supported candidate range: `PySide6-Essentials>=6.11,<6.12`
 
-Qt remains an optional project extra and is now the default UI for the overlay, manager, `launch_gui.cmd`, and manager-spawned overlay. `--ui tk` retains the temporary fallback.
+Qt is the required and sole UI for the overlay, manager, `launch_gui.cmd`, manager-spawned overlays, credential prompts, and plugin companion dashboards.
 
 ## Verified
 
-- `.[dev,qt]` resolves and installs in the selected Python 3.14 environment.
+- `.[dev]` resolves and installs the required Qt runtime in the selected Python 3.14 environment.
 - `QApplication` can be created and reused with stable application identity.
 - A `QTimer` bridge can drain the existing controller's latest event and emit it on the Qt event loop.
 - Stopping the bridge stops its timer before stopping the controller source.
@@ -34,12 +34,12 @@ Qt remains an optional project extra and is now the default UI for the overlay, 
 - Structural row changes perform one model reset.
 - A native `QListView` retains keyboard focus, current selection, and scroll position across value-only updates.
 - `PanelSection` and `PanelAction` support optional stable keys while preserving existing positional construction.
-- Pure detail filtering, caught filtering, and section preview rules now live in `core.presentation` instead of the Tk module.
+- Pure detail filtering, caught filtering, and section preview rules live in `core.presentation`.
 - Section and action identities deterministically disambiguate duplicate legacy titles and labels.
 - Section expansion, action expansion, detail filters, selection, focus, and scroll state survive keyed value-only snapshots.
 - An exact controller content key resets transient presentation state when content changes, including same-title content.
 - Native section/action controls expose accessible names and reconcile by identity instead of clearing the full scroll area.
-- Tk and Qt now consume one immutable shared theme source.
+- Qt consumes one immutable shared theme source.
 - The light-theme success and warning text tokens were corrected from measured 4.25:1 and 3.79:1 contrast to AA-safe values above 5.1:1.
 - Every semantic foreground/background pair in light, dark, and high-contrast themes is covered by a WCAG AA regression test.
 - `PanelRowDelegate` renders completion symbols, emphasis, wrapped text, progress tracks/fills, bounded high-DPI icons, and chips from generic model roles only.
@@ -53,16 +53,16 @@ Qt remains an optional project extra and is now the default UI for the overlay, 
 - Focus tests verify the visual first-hop tab order through overlay role controls, map controls, and manager catalog actions; editable fields retain numeric input instead of triggering role shortcuts.
 - Dynamic labels expose their live game, location, connection, urgent, map, zoom, manager, settings, and credential-validation text as the accessible name while retaining semantic context in the accessible description.
 - The first `QtOverlayWindow` renders typed snapshots and diagnostics, remembers role selection per game, supports hide-completed state, and stops its controller bridge once on close.
-- `retroarch-overlay` reaches the Qt application bootstrap through a lazy optional import; `--ui tk` remains the explicit fallback.
+- `retroarch-overlay` and `retroarch-overlay-manager` bootstrap Qt directly and reject the removed `--ui` selector.
 - Local settings and hero-path documents now use same-directory temporary files, flush plus `fsync`, atomic replacement, and failure cleanup; forced replacement failures preserve prior files byte-for-byte.
 - Qt loads the existing theme, saved opacity, and per-game active role through `LocalPluginSettings`.
-- The nonblocking Qt overlay settings dialog edits layout mode, side, width, density, game scaling, RetroArch-window management, theme, and opacity with the same ranges and choices as Tk.
-- Saving overlay preferences writes profile, theme, and opacity in one atomic document update shared by Tk and Qt, then applies the Qt layout, native opacity, and resolved theme immediately; persistence failures remain visible without partially applying runtime state.
-- Qt writes window geometry under `main-qt`, preserving Tk's `main` and `main-native` values during coexistence.
+- The nonblocking Qt overlay settings dialog edits layout mode, side, width, density, game scaling, RetroArch-window management, theme, and opacity with validated ranges and choices.
+- Saving overlay preferences writes profile, theme, and opacity in one atomic document update, then applies the Qt layout, native opacity, and resolved theme immediately; persistence failures remain visible without partially applying runtime state.
+- Qt writes window geometry under `main-qt` and retains legacy geometry migration support.
 - First Qt launch combines the legacy `main` position with `main-native` size, then constrains it to the nearest current monitor work area.
 - Removed-monitor, negative-coordinate monitor, oversized-window, and Qt-specific geometry cases have pure regression coverage.
-- Opacity, topmost, frameless chrome, and taskbar presence are independent `WindowPresentation` policies; normal opaque framed behavior remains the default.
-- The layout coordinator now lives in `app.layout`; Tk retains its existing `ResponsiveLayoutManager` API through a thin target adapter.
+- Opacity, topmost, frameless chrome, and taskbar presence are independent `WindowPresentation` policies; the generic policy remains normal and framed while the production overlay explicitly defaults to topmost.
+- The toolkit-neutral layout coordinator lives in `app.layout` and is consumed through the Qt geometry target.
 - The shared coordinator retries failed native placements, distinguishes restarted RetroArch handles, and clears restoration baselines between management sessions.
 - `QtGeometryTarget` and `QtResponsiveLayoutManager` translate the shared layout result into Qt work-area queries and `setGeometry` calls.
 - A toolkit-neutral compact projection retains urgent/party/goals sections, uses plugin-provided compact rows or first-row fallback, preserves stable keys, and removes actions.
@@ -70,7 +70,7 @@ Qt remains an optional project extra and is now the default UI for the overlay, 
 - Automatic overlay, rail, dual-strip, and pause-drawer layout refresh is enabled in the experimental Qt path when a snapshot provides `GameDisplaySpec`.
 - Entering a managed Qt mode preserves the prior unmanaged Qt rectangle; close restores the exact captured RetroArch rectangle before atomically saving `main-qt`.
 - Timer-driven mode changes hide/show the secondary window and role controls coherently, and all layout timers stop before teardown.
-- Toolkit-neutral map viewport, projection, calibration, wrapping, tooltip, path, marker, opacity, layer-selection, and tracked-position helpers now live in `core.map`; Tk imports the same functions.
+- Toolkit-neutral map viewport, projection, calibration, wrapping, tooltip, path, marker, opacity, layer-selection, and tracked-position helpers live in `core.map`.
 - `QtMapView` uses `QGraphicsScene` with lazy layer loading, a four-entry LRU pixmap cache, calibrated player/waypoint/region coordinates, static tooltips, and dynamic overlay items.
 - Wrapping layers reuse one implicitly shared pixmap across a 3x3 scene and create corresponding marker copies so edge-centered views contain the opposite side.
 - Nonwrapping layers use one image and rely on scene bounds for clamped navigation.
@@ -78,10 +78,10 @@ Qt remains an optional project extra and is now the default UI for the overlay, 
 - Discrete zoom levels `(1, 2, 4, 8, 16)`, native hand-drag mode, wheel stepping, and player recentering are implemented in the map component.
 - A rendered-pixel test proves the offscreen scene contains both source-image pixels and the dynamic player marker.
 - `QtMapWindow` provides generic layer, overlay, hide-completed, opacity, zoom, recenter, source-credit, and accessible marker-list controls.
-- Map and minimap windows read the existing Tk-compatible view-state schema and write separate `map-qt`/`minimap-qt` geometry keys with legacy geometry fallback.
+- Map and minimap windows read the existing view-state schema and write separate `map-qt`/`minimap-qt` geometry keys with legacy geometry fallback.
 - Map controls persist immediately, close hides for fast reopening, shutdown cancels timers and destroys owned windows, and hidden windows retain pending state without loading images.
 - The Qt shell exposes map and minimap buttons plus Alt+M/Alt+N shortcuts only when a snapshot supplies a map document and position.
-- The Qt shell now preserves the Tk keyboard contract: Escape collapses to the header and restores the prior expanded geometry, keys 1-4 switch visible role views without intercepting text entry, and Page Up/Page Down scroll the main document.
+- The Qt shell supports Escape to collapse or restore the prior expanded geometry, keys 1-4 to switch visible role views without intercepting text entry, and Page Up/Page Down to scroll the main document.
 - Incoming snapshots update hidden state without expanding a collapsed shell, managed-layout refreshes do not reopen it, and closing while collapsed persists the expanded rectangle rather than the temporary header height.
 - Hero paths continue recording while map windows are closed, persist atomically through the existing settings service, update incrementally when visible, and do not materialize while their overlay is hidden.
 - Generic waypoint marker shapes, symbols, completion colors, objective rings, encounter labels, tooltips, and accessible marker navigation are preserved.
@@ -97,31 +97,46 @@ Qt remains an optional project extra and is now the default UI for the overlay, 
 - `PluginManagerState` now owns immutable installed/catalog rows, isolated manifest errors, stable selection, query filtering, local ROM/save paths, and raw manifest details without Git inspection on selection.
 - `PluginEditorValues` validates create/update input before repository mutation, preserves plugin identity during edits, and supplies the existing plugin generator and decomp installer without duplicating manifest logic in Qt.
 - Installed and catalog Qt table models expose semantic identity/accessibility roles and multi-token filtering without unnecessary resets.
-- `TaskCoordinator` provides one bounded daemon operation at a time with UI-dispatched success/failure and callback suppression after close; Tk repository tasks and the Qt manager use the same rule.
+- `TaskCoordinator` provides one bounded daemon operation at a time with Qt-dispatched success/failure and callback suppression after close.
 - `QtPluginManagerWindow` renders installed/catalog model views, searchable catalog state, selected manifest details, raw TOML, and asynchronous catalog loading.
 - The Qt manager invokes existing bounded services for catalog/URL install, fast-forward update, inspected and explicitly confirmed delete, repository opening, and overlay launch.
 - Repository operation controls disable while busy, recover after failure, refresh installed/catalog state after success, and preserve the selected repository where applicable.
 - The scrollable manifest editor creates and updates validated manifests, browses plugin/ROM/save paths, persists local paths, prevents slug changes, and drives optional decomp-submodule setup.
-- The Qt settings dialog persists RetroArch location and network-command state, while shared credential resolution preserves explicit, stored, and prompted RetroAchievements API-key precedence for both Tk and Qt.
+- The Qt settings dialog persists RetroArch location and network-command state, while shared credential resolution preserves explicit, stored, and Qt-prompted RetroAchievements API-key precedence.
 - RetroAchievements workflows discover metadata from local hashes, handle ambiguous game selection, open code-note pages, and import selected code-note exports through bounded tasks.
 - The manager's responsive action grid and editor remain usable at its minimum window size, and explicit child palettes prevent native dark-mode colors from leaking into light-theme editor surfaces.
-- `retroarch-overlay-manager` and `launch_gui.cmd` select the Qt manager, and manager-launched overlays explicitly select Qt.
+- `retroarch-overlay-manager` and `launch_gui.cmd` start the Qt manager, and manager-launched overlays use the sole Qt entry path.
 - Production Qt imports are restricted by an AST-based gate to `QtCore`, `QtGui`, and `QtWidgets`; `QtTest` remains test-only.
-- The optional dependency now installs `PySide6-Essentials` directly. A clean 6.11.2 environment excludes both the PySide6 meta-package and the unused 435.64 MiB Addons distribution.
+- The required dependency installs `PySide6-Essentials` directly. A clean 6.11.2 environment excludes both the PySide6 meta-package and the unused 435.64 MiB Addons distribution.
 - The Windows deployment allowlist contains only `qwindows`, `qmodernwindowsstyle`, and the GIF/ICO/JPEG image readers observed in a native plugin trace; PNG succeeds without a separate plugin.
 - Before creating a Windows `QApplication`, the host checks that every allowlisted plugin exists and reports the missing paths plus an exact Essentials reinstall command.
-- The bounded package verifier builds from a temporary staged source, inspects wheel metadata and notices, installs the `qt` extra into a fresh environment, starts Qt outside the checkout, exercises all four entry points, verifies reinstall/uninstall settings preservation, and removes its environment without dirtying the repository.
+- The bounded package verifier builds from a temporary staged source, inspects wheel metadata and notices, installs the wheel and its required Qt runtime into a fresh environment, starts Qt outside the checkout, exercises all four entry points, verifies reinstall/uninstall settings preservation, and removes its environment without dirtying the repository.
 - The isolated 6.11.2 package run measured approximately 2.01 MiB for the application, 204.27 MiB for Essentials, and 2.96 MiB for shiboken.
 - Windows CI now runs the isolated package verifier after the normal suite.
-- A process-isolated native Tk/Qt benchmark applies the same 240-row immutable document and measures startup, first render, unchanged/value/structural updates, memory, idle CPU, and repeated window lifecycle with hard child-process timeouts.
-- On the first 50/10/5-second/10-cycle baseline, Qt started 2.21x slower and used 1.75x private memory, while first render was 83.2% faster, value updates were 76.0% faster, structural updates were 96.8% faster, and ten start-close cycles were 77.8% faster.
-- The benchmark exposed a 40.8 ms unchanged-snapshot path. Requiring both snapshot and exact content-scope equality before early return reduced the final Qt unchanged path to 0.0213 ms mean and 0.0780 ms p95 without weakening same-title ROM isolation.
-- Both toolkits consumed less CPU than the Windows process-time clock resolved during a five-second live idle sample. This is an upper-bound observation, not a claim of zero CPU use.
-- Architecture tests scan every present plugin's top-level Python modules and `game/` package for Tkinter, PySide6, and PyQt6 imports.
-- Only the Vagrant Story Tk sidecar dashboard remains a temporary GUI-toolkit exception.
-- The full base suite passes with 393 tests, 6 native-only skips, and 32 subtests in the local offscreen environment.
-- The opt-in native Windows suite passes 6 tests covering normal, topmost/translucent, and frameless/tool policies, live policy round trips, four-monitor movement, and repeated full-process startup/shutdown.
-- All independent plugin suites pass against the extended contracts: Pokemon Red 65, Dragon Warrior III 86, Pokemon Emerald 147 plus 54 subtests, Dragon Warrior IV 97, and Vagrant Story 50.
+- Architecture tests scan core production modules for Tkinter and every plugin's top-level Python modules and `game/` package for GUI-toolkit imports.
+- No plugin production module imports Tkinter, PySide6, or PyQt6, and no temporary GUI-toolkit exception remains.
+- The final Qt-only base suite passes with 332 tests, 7 native-only skips, and no warnings in the local offscreen environment.
+- The opt-in native Windows suite passes 7 tests covering normal, topmost/translucent, and frameless/tool policies, the production overlay's default topmost/frame-fit behavior, live policy round trips, four-monitor movement, and repeated full-process startup/shutdown.
+- All independent plugin suites pass against the extended contracts: Pokemon Red 71, Dragon Warrior III 86, Pokemon Emerald 171 plus 61 subtests, Dragon Warrior IV 98, and Vagrant Story 73.
+- Both Pokémon wild-IV comparators now rank the active wild Pokémon against the
+    best same-family candidate in party and PC storage. Emerald reads all 14 live
+    boxes once per encounter; Red reads all 12 checksum-valid boxes from the
+    configured save and labels them as last-save data.
+- The overlay is topmost by default. Frame-aware placement keeps native title
+    bars and borders inside the desktop work area, and manual drag/resize undocks
+    automatic placement without a later snap-back.
+- The generic companion starts as a desktop-height right rail, migrates the old
+    1260-pixel default, permits a 420-pixel minimum width, persists frame position,
+    wraps control-heavy workspaces, and substitutes compact navigation plus
+    vertical map/record panes below 720 pixels.
+- Pokemon Red now supplies native Game Boy display metadata on waiting and live
+    snapshots, so all five plugins participate in automatic layout.
+- The native Windows suite passes 7 tests, including the actual topmost style
+    and full-height frame containment; real narrow DW4 and Vagrant captures are
+    nonblank at 440x700.
+- Player markers blink at a shared 450 ms cadence on full maps, minimaps,
+  embedded companion maps, and popouts. Hidden maps and disabled player layers
+  stop the timer and reset to a visible phase before reopening.
 - Dragon Warrior III now supplies stable section/action identities, semantic roles,
   content-lifecycle isolation, real overworld/battle/local-map Qt integration,
   explicit Sphere of Light routing, Dhama readiness, and atomic generated-map
@@ -131,8 +146,25 @@ Qt remains an optional project extra and is now the default UI for the overlay, 
     workspaces, world selectors, local maps, player/features/popout, manual versus
     game completion precedence, playthrough migration, search/sort, lazy encounter
     details, UI-state isolation, waiting/error states, and bounded sidecar lifecycle
-    pass real-document Qt tests. The plugin-owned Tk renderer and architecture
+    pass real-document Qt tests. The plugin-owned legacy renderer and architecture
     exception have been removed.
+- Pokemon Emerald now supplies stable identities for all 48 presentation
+    constructors, content/title lifecycle isolation, coherent Trainer-ID rebinding
+    after save-block relocation, dense real-snapshot Qt coverage, all Frontier
+    facility states, account success/failure presentation, real Route 119/Hoenn
+    and route/city/interior/cave/underwater Qt maps, atomic generated images,
+    renderer-versioned map/icon caches, and a bounded species-icon LRU.
+- Vagrant Story now publishes six generic dashboard workspaces and launches the
+    shared Qt host plus an isolated voice worker. Battle radar/master-detail,
+    all 31 atlases, progressive puzzles, exact Forge controls, Challenges, every
+    Codex category/image/read command, voice/TTS/cues, title/memory/card/dump
+    failures, atomic derived assets, bounded process shutdown, and keyed overlay
+    transitions pass executable tests. Its plugin-owned legacy renderer and the final
+    plugin architecture exception have been removed.
+- The cross-plugin gate discovers and loads all five repositories together,
+    verifies order-independent matching, module/state/workspace/control isolation,
+    malformed/import/runtime failure recovery, unsupported API diagnostics,
+    content-scoped transient state, and rapid lifecycle switching.
 
 ## Runtime Finding
 
@@ -177,14 +209,13 @@ Base closure disposition:
 - maximum-density documents are validated in each owning game phase;
 - Vagrant Story codex image behavior is validated in the Vagrant Story phase;
 - Dragon Warrior IV and Vagrant Story dashboard/sidecar fixtures are validated in their owning phases;
-- the Python source/wheel model and separate optional Qt licensing are documented in `QT_PACKAGING.md` and `NOTICE`; and
+- the Python source/wheel model and separate Qt licensing are documented in `QT_PACKAGING.md` and `NOTICE`; and
 - the final base suite passed with 380 tests, 6 native-only skips, and 32 subtests, followed by clean independent-plugin suites.
 
 The revised base gate closed on 2026-09-13. No plugin repository was modified
 before that closure.
 
-PySide6 remains an optional dependency extra while Tk and Qt coexist. Qt is the
-default UI; Tk remains an explicit rollback path during the game phases.
+PySide6-Essentials is a required dependency. Qt is the only production UI.
 
 ## Implemented Files
 
@@ -203,7 +234,7 @@ default UI; Tk remains an explicit rollback path during the game phases.
 - `presentation/qt/overlay_settings_dialog.py`: nonblocking validated layout/theme/opacity settings
 - `presentation/qt/plugin_manager_models.py`: installed/catalog table models and proxy filtering
 - `presentation/qt/plugin_manager_window.py`: operational Qt installed/catalog manager shell
-- `presentation/qt/overlay_window.py`: opt-in shell for snapshots, diagnostics, controls, and lifecycle
+- `presentation/qt/overlay_window.py`: production shell for snapshots, diagnostics, controls, and lifecycle
 - `presentation/qt/panel_document.py`: stable section/action identities and transient view state
 - `presentation/qt/panel_document_view.py`: keyed native section/action components
 - `presentation/qt/panel_delegate.py`: semantic row painting and bounded high-DPI icon cache
@@ -213,7 +244,7 @@ default UI; Tk remains an explicit rollback path during the game phases.
 - `presentation/qt/tasks.py`: Qt signal adapter for shared bounded tasks
 - `presentation/qt/theme.py`: Qt palette and contrast-safe native control styling
 - `presentation/qt/window_state.py`: presentation policies and legacy-compatible Qt geometry persistence
-- `presentation/theme.py`: immutable shared Tk/Qt theme tokens and semantic color helpers
+- `presentation/theme.py`: immutable theme tokens and semantic color helpers
 - `core/map.py`: toolkit-neutral map geometry, wrapping, tracking, and path helpers
 - `app/layout.py`: toolkit-neutral layout orchestration and RetroArch restoration lifecycle
 - `app/dashboard.py`: versioned dashboard document/control store and atomic UI/game-state persistence
@@ -225,7 +256,7 @@ default UI; Tk remains an explicit rollback path during the game phases.
 - `tests/test_dashboard_state.py`: dashboard schema, partial-file, control, completion, and UI-state evidence
 - `tests/test_qt_dashboard_window.py`: generic dashboard workspace, map, record, lifecycle, and failure evidence
 - `tests/reference_documents.py`: deterministic shared-contract fixtures
-- `tests/test_main.py`: Qt-default and Tk-fallback bootstrap behavior
+- `tests/test_main.py`: Qt-only bootstrap and removed-selector behavior
 - `tests/test_app_layout.py`: shared layout placement/retry/restart lifecycle
 - `tests/test_local_settings.py`: atomic settings and hero-path failure safety
 - `tests/test_qt_layout.py`: Qt target coordinate translation
@@ -253,16 +284,18 @@ default UI; Tk remains an explicit rollback path during the game phases.
 - `tests/test_qt_window_state.py`: legacy geometry, monitor clamping, policy independence, and Qt-specific saves
 - `tests/test_ra_credentials.py`: shared credential precedence and client construction
 - `tests/test_tasks.py`: task exclusion, callback dispatch, errors, and close suppression
-- `tests/test_manager_main.py`: Qt-default and Tk-fallback manager dispatch
+- `tests/test_manager_main.py`: Qt-only manager dispatch
 - `tests/test_architecture.py`: whole-plugin GUI-toolkit boundary check
+- `tests/test_cross_plugin_compatibility.py`: five-plugin discovery, namespace, failure-isolation, and lifecycle gate
 - `tools/verify_qt_package.py`: bounded clean wheel/install/reinstall/uninstall smoke harness
-- `tools/benchmark_ui_renderers.py`: process-isolated native Tk/Qt base rendering, memory, idle, and lifecycle benchmark
 - `docs/QT_PACKAGING.md`: supported versions, allowlists, recovery, release checks, and licensing obligations
-- `docs/QT_UI_PERFORMANCE_BASELINE.md`: reproducible native base-renderer benchmark and first measured comparison
 
-## Next Slice
+## Final State
 
-Begin Pokemon Emerald. Preserve its toolkit-neutral production boundary and
-migrate its high-density documents, persistent observations, map/icon surfaces,
-and representative live snapshots through the shared Qt host. Do not reopen waived installer,
-accessibility, native, or performance acceptance work.
+All game phases and the cross-plugin compatibility gate are complete. The user
+approved final Tkinter removal on 2026-09-13. The legacy overlay, manager,
+credential/layout modules, selector flags, tests, benchmark, and compatibility
+imports have been removed; Qt is the sole production UI. The final base suite,
+all five independent plugin suites, the 15-test cross-plugin/architecture gate,
+the clean-wheel verifier, knowledge generation check, and repository whitespace
+checks pass.

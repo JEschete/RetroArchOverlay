@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from PySide6.QtCore import QMargins
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QWidget
 
@@ -25,7 +26,15 @@ class QtGeometryTarget:
         )
 
     def set_geometry(self, rect: ScreenRect) -> None:
-        self._window.setGeometry(rect.left, rect.top, rect.width, rect.height)
+        handle = self._window.windowHandle()
+        margins = handle.frameMargins() if handle is not None else QMargins()
+        client = _client_rect_for_frame(rect, margins)
+        self._window.setGeometry(
+            client.left,
+            client.top,
+            client.width,
+            client.height,
+        )
 
 
 class QtResponsiveLayoutManager(CompanionLayoutManager):
@@ -48,3 +57,11 @@ class QtResponsiveLayoutManager(CompanionLayoutManager):
             display,
             paused=paused,
         )
+
+
+def _client_rect_for_frame(rect: ScreenRect, margins: QMargins) -> ScreenRect:
+    left = rect.left + margins.left()
+    top = rect.top + margins.top()
+    width = max(1, rect.width - margins.left() - margins.right())
+    height = max(1, rect.height - margins.top() - margins.bottom())
+    return ScreenRect(left, top, left + width, top + height)

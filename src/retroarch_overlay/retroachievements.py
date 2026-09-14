@@ -8,7 +8,12 @@ from typing import Callable, cast
 from .core.retroachievements import RAProgress
 from .infrastructure.credentials import KEYRING_SERVICE, KeyringCredentialStore
 from .infrastructure.retroachievements import load_ra_progress, retroarch_setting
-from .presentation.tk.credentials import prompt_ra_api_key
+
+
+def prompt_ra_api_key(username: str) -> str:
+    from .presentation.qt.credentials import prompt_ra_api_key as prompt
+
+    return prompt(username)
 
 
 class _LiveRAProgress:

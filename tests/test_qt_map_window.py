@@ -321,3 +321,20 @@ def test_local_only_document_hides_empty_layer_selector(qtbot, tmp_path: Path) -
 
     assert window.layer_combo.isHidden()
     window.shutdown()
+
+
+def test_full_map_and_minimap_both_enable_player_blinking(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    owner = QWidget()
+    qtbot.addWidget(owner)
+    document = _document(tmp_path)
+    full_map = QtMapWindow(owner, document)
+    minimap = QtMapWindow(owner, document, compact=True)
+
+    assert full_map.map_view.player_blink_enabled
+    assert minimap.map_view.player_blink_enabled
+
+    full_map.shutdown()
+    minimap.shutdown()

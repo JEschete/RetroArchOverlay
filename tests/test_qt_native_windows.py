@@ -13,7 +13,13 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLineEdit, QMainWindow
 
-from retroarch_overlay.presentation.qt import WindowPresentation, apply_window_presentation
+from retroarch_overlay.core.models import ScreenRect
+from retroarch_overlay.presentation.qt import (
+    QtGeometryTarget,
+    QtOverlayWindow,
+    WindowPresentation,
+    apply_window_presentation,
+)
 
 
 NATIVE_WINDOWS_ENABLED = (
@@ -33,6 +39,20 @@ WS_CAPTION = 0x00C00000
 WS_EX_TOPMOST = 0x00000008
 WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_LAYERED = 0x00080000
+
+
+class _OverlayController:
+    content_key = None
+    last_status = None
+
+    def start(self) -> None:
+        return None
+
+    def stop(self) -> None:
+        return None
+
+    def drain_latest(self):
+        return None
 
 
 @pytest.mark.parametrize(
@@ -125,6 +145,33 @@ def test_live_window_moves_across_every_attached_screen(qtbot) -> None:
     assert set(observed) >= {screen.name() for screen in screens[1:]}
     with qtbot.waitSignal(window.destroyed, timeout=1_000):
         window.close()
+
+
+def test_overlay_defaults_topmost_and_keeps_managed_frame_on_desktop(qtbot) -> None:
+    window = QtOverlayWindow(_OverlayController())
+    qtbot.addWidget(window)
+    window.show()
+    assert QTest.qWaitForWindowExposed(window, 1_000)
+    available = window.screen().availableGeometry()
+    target = ScreenRect(
+        available.right() - 359,
+        available.top(),
+        available.right() + 1,
+        available.bottom() + 1,
+    )
+
+    QtGeometryTarget(window).set_geometry(target)
+    QApplication.processEvents()
+    _, extended_style = _native_styles(int(window.winId()))
+
+    assert extended_style & WS_EX_TOPMOST
+    assert window.frameGeometry().getRect() == (
+        target.left,
+        target.top,
+        target.width,
+        target.height,
+    )
+    window.close()
 
 
 def test_live_presentation_round_trip_preserves_native_window_state(qtbot) -> None:

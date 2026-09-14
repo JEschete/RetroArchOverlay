@@ -21,11 +21,7 @@ FORBIDDEN_GAME_IMPORTS = frozenset(
     }
 )
 FORBIDDEN_PLUGIN_GUI_IMPORTS = frozenset({"PyQt6", "PySide6", "tkinter"})
-TEMPORARY_PLUGIN_GUI_EXCEPTIONS = frozenset(
-    {
-        Path("plugins/RAO_vagrantstory/dashboard.py"),
-    }
-)
+TEMPORARY_PLUGIN_GUI_EXCEPTIONS = frozenset()
 
 
 def imported_modules(path: Path) -> tuple[tuple[str, int], ...]:
@@ -47,9 +43,7 @@ def plugin_runtime_paths(repository: Path) -> tuple[Path, ...]:
 
 
 class ArchitectureBoundaryTests(unittest.TestCase):
-    def test_plugin_runtime_code_is_toolkit_neutral_except_temporary_dashboards(
-        self,
-    ) -> None:
+    def test_plugin_runtime_code_is_toolkit_neutral(self) -> None:
         violations = []
         for repository in PLUGIN_ROOT.glob("RAO_*"):
             if not repository.is_dir():
@@ -62,6 +56,16 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                     if module.partition(".")[0] in FORBIDDEN_PLUGIN_GUI_IMPORTS:
                         violations.append(f"{relative_path} imports {module}")
         self.assertEqual(violations, [])
+
+    def test_core_production_code_contains_no_tkinter(self) -> None:
+        violations = []
+        for path in SOURCE_ROOT.rglob("*.py"):
+            for module, _ in imported_modules(path):
+                if module.partition(".")[0] == "tkinter":
+                    violations.append(f"{path.relative_to(PROJECT_ROOT)} imports {module}")
+        self.assertEqual(violations, [])
+        self.assertFalse((SOURCE_ROOT / "ui.py").exists())
+        self.assertFalse((SOURCE_ROOT / "presentation" / "tk").exists())
 
     def test_core_production_source_contains_no_dragon_plugin_knowledge(self) -> None:
         violations = []
@@ -95,6 +99,22 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             "Dragon Quest IV",
             "dragonwarrior4",
             "dragon_warrior_4",
+        )
+        for path in SOURCE_ROOT.rglob("*.py"):
+            content = path.read_text(encoding="utf-8")
+            for value in forbidden:
+                if value in content:
+                    violations.append(f"{path.relative_to(PROJECT_ROOT)} contains {value}")
+        self.assertEqual(violations, [])
+
+    def test_core_production_source_contains_no_remaining_game_knowledge(self) -> None:
+        violations = []
+        forbidden = (
+            "Pokemon Red",
+            "Pokémon Red",
+            "pokered",
+            "Vagrant Story",
+            "vagrantstory",
         )
         for path in SOURCE_ROOT.rglob("*.py"):
             content = path.read_text(encoding="utf-8")

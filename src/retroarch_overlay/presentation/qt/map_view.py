@@ -82,6 +82,7 @@ class QtMapView(QGraphicsView):
     PATH_CHUNK_POINTS = 1024
     PATH_INCREMENT_LIMIT = 128
     OBJECTIVE_FLASH_INTERVAL_MS = 450
+    PLAYER_BLINK_INTERVAL_MS = 450
     HIDDEN_OVERLAYS = frozenset(("path", "collectibles", "npcs", "encounters"))
 
     def __init__(
@@ -91,6 +92,7 @@ class QtMapView(QGraphicsView):
         image_cache: QtMapImageCache | None = None,
         hero_paths: dict[str, list[tuple[int, int]]] | None = None,
         animate_objectives: bool = True,
+        blink_player: bool = True,
         parent: QWidget | None = None,
     ) -> None:
         if not document.layers:
@@ -140,6 +142,11 @@ class QtMapView(QGraphicsView):
         self._objective_timer = QTimer(self)
         self._objective_timer.setInterval(self.OBJECTIVE_FLASH_INTERVAL_MS)
         self._objective_timer.timeout.connect(self._toggle_objective_flash)
+        self._blink_player = bool(blink_player)
+        self._player_blink_visible = True
+        self._player_timer = QTimer(self)
+        self._player_timer.setInterval(self.PLAYER_BLINK_INTERVAL_MS)
+        self._player_timer.timeout.connect(self._toggle_player_blink)
         self._zoom = 1
         self._static_build_count = 0
         self._dynamic_update_count = 0
@@ -220,6 +227,14 @@ class QtMapView(QGraphicsView):
     def objective_timer_active(self) -> bool:
         return self._objective_timer.isActive()
 
+    @property
+    def player_blink_enabled(self) -> bool:
+        return self._blink_player
+
+    @property
+    def player_timer_active(self) -> bool:
+        return self._player_timer.isActive()
+
     def visible_waypoints(self) -> tuple[MapWaypoint, ...]:
         layer = self.layers[self._layer_key]
         waypoints = layer.waypoints + self._overlays.get(layer.key, ())
@@ -253,6 +268,8 @@ class QtMapView(QGraphicsView):
         if self._pixmap is not None:
             self._rebuild_overlay_items()
         self._apply_item_visibility()
+        if kind == "player":
+            self._sync_player_timer()
         return True
 
     def set_hide_completed(self, hidden: bool) -> bool:
@@ -383,9 +400,13 @@ class QtMapView(QGraphicsView):
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
         self._sync_objective_timer()
+        self._sync_player_timer()
 
     def hideEvent(self, event: QHideEvent) -> None:
         self._objective_timer.stop()
+        self._player_timer.stop()
+        self._player_blink_visible = True
+        self._apply_item_visibility()
         super().hideEvent(event)
 
     def _rebuild_scene(self) -> None:
@@ -672,11 +693,13 @@ class QtMapView(QGraphicsView):
             item.setPos(source_x + offset_x, source_y + offset_y)
             item.setToolTip(tooltip)
         self._apply_item_visibility()
+        self._sync_player_timer()
 
     def _remove_player_items(self) -> None:
         for item in self._player_items:
             self._map_scene.removeItem(item)
         self._player_items = []
+        self._sync_player_timer()
 
     def _apply_item_visibility(self) -> None:
         for item, kind, completed in (
@@ -690,6 +713,8 @@ class QtMapView(QGraphicsView):
                 visible = visible and self._objective_flash_visible
             item.setVisible(visible)
         player_visible = self._overlay_visibility.get("player", True)
+        if self._blink_player:
+            player_visible = player_visible and self._player_blink_visible
         for item in self._player_items:
             item.setVisible(player_visible)
         path_visible = self._overlay_visibility.get("path", True)
@@ -719,6 +744,24 @@ class QtMapView(QGraphicsView):
 
     def _toggle_objective_flash(self) -> None:
         self._objective_flash_visible = not self._objective_flash_visible
+        self._apply_item_visibility()
+
+    def _sync_player_timer(self) -> None:
+        should_blink = (
+            self._blink_player
+            and bool(self._player_items)
+            and self._overlay_visibility.get("player", True)
+            and self.isVisible()
+        )
+        if should_blink:
+            if not self._player_timer.isActive():
+                self._player_timer.start()
+            return
+        self._player_timer.stop()
+        self._player_blink_visible = True
+
+    def _toggle_player_blink(self) -> None:
+        self._player_blink_visible = not self._player_blink_visible
         self._apply_item_visibility()
 
     def _sync_path_items(self) -> None:

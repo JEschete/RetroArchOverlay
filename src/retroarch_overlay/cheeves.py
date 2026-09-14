@@ -7,7 +7,12 @@ from .core.errors import RetroAchievementsError
 from .infrastructure.credentials import KeyringCredentialStore
 from .infrastructure.ra_code_notes import SavedCodeNotesRepository
 from .infrastructure.retroachievements import RetroAchievementsClient, retroarch_setting
-from .presentation.tk.credentials import prompt_ra_api_key
+
+
+def prompt_ra_api_key(username: str) -> str:
+    from .presentation.qt.credentials import prompt_ra_api_key as prompt
+
+    return prompt(username)
 
 
 def default_retroarch_config() -> Path:

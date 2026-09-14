@@ -12,6 +12,8 @@ from retroarch_overlay.presentation.qt import (
     QtDashboardRecordsView,
     QtDashboardWindow,
 )
+from retroarch_overlay.presentation.qt.dashboard_window import _dashboard_frame_rect
+from retroarch_overlay.core.models import ScreenRect
 
 
 def _documents(tmp_path: Path) -> tuple[DashboardStore, dict, dict]:
@@ -273,6 +275,7 @@ def test_map_view_renders_features_and_persists_manual_completion(
     assert map_workspace.map_view is not None
 
     assert map_workspace.map_view.layer_key == "area-01"
+    assert map_workspace.map_view.player_blink_enabled
     assert map_workspace.map_view.image_item_count == 1
     assert map_workspace.map_view.player_scene_positions == ((16.0, 32.0),)
     assert map_workspace.feature_count == 2
@@ -287,6 +290,10 @@ def test_map_view_renders_features_and_persists_manual_completion(
         waypoint.title == "Treasure" and waypoint.completed
         for waypoint in map_workspace.map_view.visible_waypoints()
     )
+
+    map_workspace.open_popout()
+    assert map_workspace._popout is not None
+    assert map_workspace._popout.view.player_blink_enabled
 
 
 def test_records_filter_and_load_declared_detail_file(qtbot, tmp_path: Path) -> None:
@@ -343,6 +350,67 @@ def test_workspace_ui_state_is_separate_and_restored(qtbot, tmp_path: Path) -> N
     assert restored_journal.sort.currentData() == "title"
     assert restored.size().width() == 1110
     assert restored.size().height() == 710
+
+
+def test_window_fits_one_screen_and_switches_to_compact_navigation(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    store, _, _ = _documents(tmp_path)
+    window = QtDashboardWindow(store, poll_interval_ms=10_000)
+    qtbot.addWidget(window)
+    window.show()
+    available = window.screen().availableGeometry()
+    frame = window.frameGeometry()
+
+    assert window.minimumWidth() == 420
+    assert frame.left() >= available.left()
+    assert frame.top() >= available.top()
+    assert frame.right() <= available.right()
+    assert frame.bottom() <= available.bottom()
+    assert frame.width() <= 720
+
+    window.resize(440, 600)
+    qtbot.wait(1)
+    window.select_workspace("records")
+    records = window.workspace_widget("records")
+
+    assert window.width() <= 440
+    assert window.sidebar.isHidden()
+    assert window.workspace_combo.isVisible()
+    assert isinstance(records, QtDashboardRecordsView)
+    assert records.splitter.orientation() == Qt.Orientation.Vertical
+
+
+def test_legacy_wide_size_migrates_to_screen_aware_default() -> None:
+    rect = _dashboard_frame_rect(
+        ScreenRect(0, 0, 1920, 1040),
+        {"width": 1260, "height": 790},
+        minimum_width=420,
+        minimum_height=360,
+    )
+
+    assert rect == ScreenRect(1184, 16, 1904, 1024)
+
+
+def test_visible_window_position_is_persisted(qtbot, tmp_path: Path) -> None:
+    store, _, _ = _documents(tmp_path)
+    window = QtDashboardWindow(store, poll_interval_ms=10_000)
+    qtbot.addWidget(window)
+    window.show()
+    window.move(25, 35)
+    expected = window.frameGeometry()
+    window.close()
+
+    persisted = json.loads(store.controls_path.read_text(encoding="utf-8"))["ui"][
+        "window"
+    ]
+    assert persisted == {
+        "left": expected.left(),
+        "top": expected.top(),
+        "width": expected.width(),
+        "height": expected.height(),
+    }
 
 
 def test_waiting_document_hides_stale_workspace_content(qtbot, tmp_path: Path) -> None:

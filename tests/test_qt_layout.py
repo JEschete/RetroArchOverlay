@@ -1,7 +1,20 @@
+from PySide6.QtCore import QMargins
 from PySide6.QtWidgets import QWidget
 
 from retroarch_overlay.core.models import ScreenRect
 from retroarch_overlay.presentation.qt import QtGeometryTarget
+from retroarch_overlay.presentation.qt.layout import _client_rect_for_frame
+
+
+def test_frame_target_keeps_native_title_bar_inside_work_area() -> None:
+    target = ScreenRect(0, 0, 360, 1040)
+
+    assert _client_rect_for_frame(target, QMargins(0, 45, 0, 8)) == ScreenRect(
+        0,
+        45,
+        360,
+        1032,
+    )
 
 
 def test_qt_geometry_target_applies_screen_rect(qtbot) -> None:

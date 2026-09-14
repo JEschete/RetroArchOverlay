@@ -34,15 +34,52 @@ class DashboardChoiceControl:
     choices: tuple[DashboardChoice, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class DashboardToggleControl:
+    key: str
+    workspace: str
+    label: str
+    default: bool
+    status_key: str = ""
+    effect: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardCounterControl:
+    key: str
+    workspace: str
+    label: str
+    default: int
+    minimum: int
+    maximum: int
+    step: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardCommandControl:
+    key: str
+    workspace: str
+    label: str
+    status_key: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardRecordControl:
+    key: str
+    workspace: str
+
+
 class DashboardStore:
     def __init__(self, state_directory: Path) -> None:
         self.state_directory = state_directory
         self.static_path = state_directory / "static.json"
         self.live_path = state_directory / "live.json"
         self.controls_path = state_directory / "controls.json"
+        self.status_path = state_directory / "status.json"
         self.static: dict[str, Any] = {}
         self.live: dict[str, Any] = {}
         self.controls: dict[str, Any] = {}
+        self.status: dict[str, Any] = {}
         self.errors: dict[str, str] = {}
         self._signatures: dict[str, tuple[int, int]] = {}
         self.refresh()
@@ -53,6 +90,7 @@ class DashboardStore:
             ("static", self.static_path),
             ("live", self.live_path),
             ("controls", self.controls_path),
+            ("status", self.status_path),
         ):
             try:
                 stat = path.stat()
@@ -138,6 +176,106 @@ class DashboardStore:
             )
         return tuple(controls)
 
+    @property
+    def toggle_controls(self) -> tuple[DashboardToggleControl, ...]:
+        controls = []
+        for value in self._control_documents("toggle"):
+            key, workspace, label = self._control_identity(value)
+            default = value.get("default", False)
+            if not key or not workspace or not label or not isinstance(default, bool):
+                continue
+            controls.append(
+                DashboardToggleControl(
+                    key,
+                    workspace,
+                    label,
+                    default,
+                    str(value.get("status_key", "")),
+                    str(value.get("effect", "")),
+                )
+            )
+        return tuple(controls)
+
+    @property
+    def counter_controls(self) -> tuple[DashboardCounterControl, ...]:
+        controls = []
+        for value in self._control_documents("counter"):
+            key, workspace, label = self._control_identity(value)
+            bounds = tuple(value.get(name) for name in ("default", "minimum", "maximum", "step"))
+            if (
+                not key
+                or not workspace
+                or not label
+                or not all(isinstance(item, int) and not isinstance(item, bool) for item in bounds)
+            ):
+                continue
+            default, minimum, maximum, step = bounds
+            if minimum > default or default > maximum or step <= 0:
+                continue
+            controls.append(
+                DashboardCounterControl(
+                    key,
+                    workspace,
+                    label,
+                    default,
+                    minimum,
+                    maximum,
+                    step,
+                )
+            )
+        return tuple(controls)
+
+    @property
+    def command_controls(self) -> tuple[DashboardCommandControl, ...]:
+        controls = []
+        for value in self._control_documents("command"):
+            key, workspace, label = self._control_identity(value)
+            if key and workspace and label:
+                controls.append(
+                    DashboardCommandControl(
+                        key,
+                        workspace,
+                        label,
+                        str(value.get("status_key", "")),
+                    )
+                )
+        return tuple(controls)
+
+    @property
+    def record_controls(self) -> tuple[DashboardRecordControl, ...]:
+        controls = []
+        for value in self._control_documents("record"):
+            key, workspace, _label = self._control_identity(value)
+            if key and workspace:
+                controls.append(DashboardRecordControl(key, workspace))
+        return tuple(controls)
+
+    @property
+    def service_statuses(self) -> dict[str, str]:
+        values = self.status.get("services", {})
+        if not isinstance(values, dict):
+            return {}
+        return {
+            str(key): str(value)
+            for key, value in values.items()
+            if isinstance(key, str) and isinstance(value, str)
+        }
+
+    @property
+    def allowed_image_paths(self) -> frozenset[Path]:
+        paths = set()
+        for collection in ("images", "maps", "areas"):
+            values = self.static.get(collection, [])
+            if not isinstance(values, list):
+                continue
+            for value in values:
+                if not isinstance(value, dict):
+                    continue
+                path = value.get("path")
+                if isinstance(path, str) and path:
+                    paths.add(Path(path).resolve())
+        return frozenset(paths)
+
     def open(self) -> None:
         self.controls["dashboard_open"] = True
         self._write_controls()
@@ -165,6 +303,68 @@ class DashboardStore:
         if self.controls.get(key, control.default) == value:
             return False
         self.controls[key] = value
+        self._write_controls()
+        return True
+
+    def set_toggle(self, key: str, value: bool) -> bool:
+        control = next(
+            (candidate for candidate in self.toggle_controls if candidate.key == key),
+            None,
+        )
+        if control is None or not isinstance(value, bool):
+            return False
+        if self.controls.get(key, control.default) is value:
+            return False
+        self.controls[key] = value
+        self._write_controls()
+        return True
+
+    def set_counter(self, key: str, value: int) -> bool:
+        control = next(
+            (candidate for candidate in self.counter_controls if candidate.key == key),
+            None,
+        )
+        if control is None or not isinstance(value, int) or isinstance(value, bool):
+            return False
+        bounded = max(control.minimum, min(control.maximum, value))
+        if self.controls.get(key, control.default) == bounded:
+            return False
+        self.controls[key] = bounded
+        self._write_controls()
+        return True
+
+    def set_record_selection(
+        self,
+        key: str,
+        value: str,
+        allowed_values: set[str],
+    ) -> bool:
+        control = next(
+            (candidate for candidate in self.record_controls if candidate.key == key),
+            None,
+        )
+        if control is None or value not in allowed_values:
+            return False
+        if self.controls.get(key) == value:
+            return False
+        self.controls[key] = value
+        self._write_controls()
+        return True
+
+    def invoke_command(self, key: str, payload: dict[str, Any] | None = None) -> bool:
+        if not any(control.key == key for control in self.command_controls):
+            return False
+        payload = payload or {}
+        encoded = json.dumps(payload, ensure_ascii=False)
+        if len(encoded.encode("utf-8")) > 64 * 1024:
+            return False
+        commands = self.controls.setdefault("commands", {})
+        if not isinstance(commands, dict):
+            commands = {}
+            self.controls["commands"] = commands
+        previous = commands.get(key, {})
+        serial = int(previous.get("serial", 0)) + 1 if isinstance(previous, dict) else 1
+        commands[key] = {"serial": serial, "payload": payload}
         self._write_controls()
         return True
 
@@ -238,6 +438,20 @@ class DashboardStore:
         stat = self.controls_path.stat()
         self._signatures["controls"] = (stat.st_mtime_ns, stat.st_size)
         self.errors.pop("controls", None)
+
+    def _control_documents(self, kind: str) -> tuple[dict[str, Any], ...]:
+        presentation = self.static.get("presentation", {})
+        values = presentation.get("controls", []) if isinstance(presentation, dict) else []
+        return tuple(
+            value
+            for value in values
+            if isinstance(value, dict) and value.get("kind") == kind
+        )
+
+    @staticmethod
+    def _control_identity(value: dict[str, Any]) -> tuple[str, str, str]:
+        parts = tuple(str(value.get(name, "")).strip() for name in ("key", "workspace", "label"))
+        return parts  # type: ignore[return-value]
 
     @staticmethod
     def _validate_schema(name: str, value: dict[str, Any]) -> None:

@@ -6,12 +6,12 @@ RetroArch Overlay plugins are standalone Git repositories named `RAO_<game>`. Th
 
 Python is a good fit for the current framework. The workload is dominated by UDP requests, small memory reads, parsing decomp data, formatting immutable view models, filesystem discovery, and desktop controls. None of those paths currently need native throughput. Python also makes independently cloned game plugins easy to inspect, test, and modify without a compiler toolchain.
 
-The main costs are desktop packaging, Tk styling limits, runtime environment setup, and the absence of a compile-time boundary between third-party plugins and the framework. The launcher handles environment setup, strict manifests limit discovery behavior, and isolated lazy loading limits plugin import effects.
+The main costs are desktop Qt packaging, runtime environment setup, and the absence of a compile-time boundary between third-party plugins and the framework. The launcher handles environment setup, strict manifests limit discovery behavior, and isolated lazy loading limits plugin import effects.
 
 Do not rewrite the framework only to make it feel more production-oriented. Introduce a native component when measurements or product requirements justify one, such as:
 
 - High-frequency memory scanning that consumes meaningful CPU time
-- Native transparent-window or compositor behavior that Tk cannot provide
+- Native transparent-window or compositor behavior outside the supported Qt window policies
 - A signed single-file desktop distribution with no managed Python runtime
 - Strong plugin isolation that requires separate processes and a versioned IPC protocol
 
@@ -143,7 +143,7 @@ PLUGIN = Plugin()
 
 Keep `plugin.py` lightweight. Do not read a decomp, import optional tooling, open files, or perform network access at import time. The framework imports plugin Python only after manifest matching selects it.
 
-The adapter receives shared services and its repository path through `GameContext`. Game code may import framework contracts and immutable presentation models. It must not import Tk widgets, credential implementations, sockets, or another plugin.
+The adapter receives shared services and its repository path through `GameContext`. Game code may import framework contracts and immutable presentation models. It must not import GUI widgets, credential implementations, sockets, or another plugin.
 
 ### Optional high-frequency capture
 

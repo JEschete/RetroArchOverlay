@@ -96,7 +96,7 @@ hashes = []
         command = popen.call_args.args[0]
         self.assertEqual(command[-2:], ["--plugin-dir", str(plugin_root)])
         self.assertEqual(command[1:3], ["-m", "retroarch_overlay.main"])
-        self.assertIn(["--ui", "qt"], [command[index:index + 2] for index in range(len(command) - 1)])
+        self.assertNotIn("--ui", command)
 
     @patch("retroarch_overlay.plugin_repository.subprocess.Popen")
     def test_launch_overlay_uses_configured_retroarch_config(self, popen: Mock) -> None:

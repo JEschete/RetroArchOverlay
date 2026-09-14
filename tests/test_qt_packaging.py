@@ -51,12 +51,11 @@ def _pyside_modules(paths: tuple[Path, ...]) -> set[str]:
     return modules
 
 
-def test_qt_extra_uses_only_the_tested_essentials_minor() -> None:
+def test_runtime_uses_only_the_tested_essentials_minor() -> None:
     config = _project_config()
 
-    assert config["project"]["optional-dependencies"]["qt"] == [
-        "PySide6-Essentials>=6.11,<6.12"
-    ]
+    assert "PySide6-Essentials>=6.11,<6.12" in config["project"]["dependencies"]
+    assert "qt" not in config["project"]["optional-dependencies"]
     policy = config["tool"]["retroarch-overlay"]["qt-deployment"]
     assert policy["runtime-distribution"] == QT_RUNTIME_DISTRIBUTION
     assert tuple(policy["runtime-modules"]) == QT_RUNTIME_MODULES

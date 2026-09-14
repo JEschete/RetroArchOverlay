@@ -61,7 +61,7 @@ class UIHangWatchdog:
         self._thread: threading.Thread | None = None
         self._last_heartbeat = clock()
         self._last_report = 0.0
-        self._context = "Tk event loop starting"
+        self._context = "UI event loop starting"
         self._reported = False
 
     def start(self) -> None:
@@ -84,7 +84,7 @@ class UIHangWatchdog:
     def stop(self) -> None:
         self._stop.set()
 
-    def heartbeat(self, context: str = "Tk event loop idle") -> None:
+    def heartbeat(self, context: str = "UI event loop idle") -> None:
         now = self._clock()
         with self._lock:
             recovered = self._reported
@@ -93,7 +93,7 @@ class UIHangWatchdog:
             self._context = context
             self._reported = False
         if recovered:
-            LOGGER.warning("Tk event loop recovered after a reported stall")
+            LOGGER.warning("UI event loop recovered after a reported stall")
 
     def set_context(self, context: str) -> None:
         with self._lock:
