@@ -8,6 +8,7 @@ from retroarch_overlay.adapters import ContentHashResolver
 from retroarch_overlay.models import RetroArchStatus
 from retroarch_overlay.retroarch import (
     RetroArchClient,
+    RetroArchError,
     parse_memory_response,
     parse_status_response,
 )
@@ -56,6 +57,34 @@ class ResponseParsingTests(unittest.TestCase):
                 "READ_CORE_MEMORY 6200 88",
             ],
         )
+
+    def test_reads_continue_across_core_memory_descriptor_boundaries(self) -> None:
+        class SplitWramClient(StubRetroArchClient):
+            def _request(self, command: str) -> str:
+                self.commands.append(command)
+                _, address, size = command.split()
+                start = int(address, 16)
+                end = min(start + int(size), 0xD000 if start < 0xD000 else 0xE000)
+                values = " ".join(f"{value & 0xFF:02x}" for value in range(start, end))
+                return f"READ_CORE_MEMORY {address} {values}"
+
+        client = SplitWramClient()
+
+        data = client.read_memory(0xCFE5, 76)
+
+        self.assertEqual(data, bytes(value & 0xFF for value in range(0xCFE5, 0xD031)))
+        self.assertEqual(
+            client.commands,
+            ["READ_CORE_MEMORY cfe5 76", "READ_CORE_MEMORY d000 49"],
+        )
+
+    def test_empty_memory_response_is_an_error(self) -> None:
+        class EmptyClient(StubRetroArchClient):
+            def _request(self, command: str) -> str:
+                return f"READ_CORE_MEMORY {command.split()[1]}"
+
+        with self.assertRaises(RetroArchError):
+            EmptyClient().read_memory(0xC000, 4)
 
     def test_resolves_active_content_md5_using_reported_crc(self) -> None:
         content = b"supported game content"

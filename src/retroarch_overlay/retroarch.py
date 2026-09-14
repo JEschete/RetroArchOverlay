@@ -93,17 +93,22 @@ class RetroArchClient:
             raise ValueError("Memory reads require a non-negative address and 1-4096 bytes")
 
         chunks = []
-        for offset in range(0, size, self._MEMORY_CHUNK_SIZE):
+        offset = 0
+        while offset < size:
             chunk_address = address + offset
             chunk_size = min(self._MEMORY_CHUNK_SIZE, size - offset)
             response = self._request(
                 f"READ_CORE_MEMORY {chunk_address:x} {chunk_size}"
             )
             data = parse_memory_response(response, chunk_address)
-            if len(data) != chunk_size:
+            if not data or len(data) > chunk_size:
                 raise RetroArchError(
                     f"Expected {chunk_size} bytes at 0x{chunk_address:X}, "
                     f"received {len(data)}"
                 )
+            # RetroArch truncates a read at the end of the core memory
+            # descriptor holding its start address (for example Game Boy WRAM
+            # banks split at 0xD000), so resume from the next descriptor.
             chunks.append(data)
+            offset += len(data)
         return b"".join(chunks)
