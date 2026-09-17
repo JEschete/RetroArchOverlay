@@ -130,6 +130,7 @@ def test_hide_caught_filters_section_and_expanded_action_rows() -> None:
     state = PanelDocumentState()
     state.set_snapshot(_snapshot())
     status = next(view for view in state.section_views if view.section.key == "status")
+    state.toggle_section_open(status.identity)
     state.toggle_section(status.identity)
     state.toggle_action(status.actions[0].identity)
 
@@ -145,6 +146,8 @@ def test_preview_toggle_exposes_hidden_rows() -> None:
     state = PanelDocumentState()
     state.set_snapshot(_snapshot())
     status = next(view for view in state.section_views if view.section.key == "status")
+    state.toggle_section_open(status.identity)
+    status = next(view for view in state.section_views if view.section.key == "status")
     assert [row.text for row in status.rows] == ["HP 10/20"]
     assert status.hidden_count == 2
 
@@ -154,6 +157,40 @@ def test_preview_toggle_exposes_hidden_rows() -> None:
     assert result is PanelDocumentUpdate.STRUCTURE
     assert len(status.rows) == 3
     assert status.hidden_count == 0
+
+
+def test_sections_start_closed_with_a_summary_unless_urgent() -> None:
+    state = PanelDocumentState()
+    state.set_snapshot(_snapshot())
+    views = {view.section.key: view for view in state.section_views}
+
+    assert not views["status"].open
+    assert [row.text for row in views["status"].rows] == ["HP 10/20"]
+    assert views["status"].hidden_count == 0
+    assert not views["party"].open
+    assert views["urgent"].open
+
+
+def test_open_sections_persist_while_hidden_by_battles_and_map_changes() -> None:
+    state = PanelDocumentState()
+    state.set_snapshot(_snapshot())
+    views = {view.section.key: view for view in state.section_views}
+    state.toggle_section_open(views["party"].identity)
+    state.toggle_section_open(views["urgent"].identity)
+    state.toggle_action(views["status"].actions[0].identity)
+
+    battle = OverlaySnapshot(
+        "Game",
+        "Battle",
+        (PanelSection("Battle", (PanelRow("Slime"),), role="urgent", key="battle"),),
+    )
+    state.set_snapshot(battle)
+    state.set_snapshot(_snapshot())
+
+    views = {view.section.key: view for view in state.section_views}
+    assert views["party"].open
+    assert not views["urgent"].open
+    assert views["status"].actions[0].expanded
 
 
 def test_stale_identity_actions_are_ignored() -> None:

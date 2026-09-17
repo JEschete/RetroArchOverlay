@@ -48,6 +48,8 @@ class PanelSectionView:
     rows: tuple[PanelRow, ...]
     hidden_count: int
     actions: tuple[PanelActionView, ...]
+    # Closed sections render only their header and a one-row summary.
+    open: bool = True
 
 
 class PanelDocumentUpdate(str, Enum):
@@ -64,6 +66,7 @@ class PanelDocumentState:
         self._active_role = "all"
         self._hide_caught = False
         self._expanded_sections: set[SectionIdentity] = set()
+        self._open_sections: dict[SectionIdentity, bool] = {}
         self._expanded_actions: set[ActionIdentity] = set()
         self._detail_filters: dict[ActionIdentity, str] = {}
         self._section_views: tuple[PanelSectionView, ...] = ()
@@ -95,11 +98,14 @@ class PanelDocumentState:
         scope_changed = bool(previous_scope) and resolved_scope != previous_scope
         if resolved_scope != previous_scope:
             self._expanded_sections.clear()
+            self._open_sections.clear()
             self._expanded_actions.clear()
             self._detail_filters.clear()
+        # Interaction state is keyed by stable section/action identity and is
+        # kept while a section is absent, so battles and map changes that hide
+        # sections do not reset what the player opened.
         self._snapshot = snapshot
         self._content_scope = resolved_scope
-        self._prune_transient_state()
         update = self._refresh()
         return PanelDocumentUpdate.CONTENT_SCOPE if scope_changed else update
 
@@ -124,6 +130,16 @@ class PanelDocumentState:
             self._expanded_sections.remove(identity)
         else:
             self._expanded_sections.add(identity)
+        return self._refresh()
+
+    def toggle_section_open(self, identity: SectionIdentity) -> PanelDocumentUpdate:
+        view = next(
+            (view for view in self._section_views if view.identity == identity),
+            None,
+        )
+        if view is None:
+            return PanelDocumentUpdate.UNCHANGED
+        self._open_sections[identity] = not view.open
         return self._refresh()
 
     def toggle_action(self, identity: ActionIdentity) -> PanelDocumentUpdate:
@@ -186,7 +202,11 @@ class PanelDocumentState:
                 continue
             section = filtered[0]
             expanded = identity in self._expanded_sections
-            rows, hidden_count = preview_section_rows(section, expanded)
+            is_open = self._open_sections.get(identity, _opens_by_default(section))
+            if is_open:
+                rows, hidden_count = preview_section_rows(section, expanded)
+            else:
+                rows, hidden_count = section.compact_rows or section.rows[:1], 0
             actions = tuple(
                 self._action_view(action_identity, action, hide_caught)
                 for action_identity, action in _action_entries(original, identity)
@@ -199,6 +219,7 @@ class PanelDocumentState:
                     rows,
                     hidden_count,
                     actions,
+                    is_open,
                 )
             )
         views.sort(key=lambda view: (not view.section.alert, view.section.priority))
@@ -223,24 +244,9 @@ class PanelDocumentState:
             len(rows) > DETAIL_FILTER_THRESHOLD or bool(filter_text),
         )
 
-    def _prune_transient_state(self) -> None:
-        snapshot = self._snapshot
-        if snapshot is None:
-            return
-        sections = _section_entries(snapshot, self._content_scope)
-        valid_sections = {identity for identity, _ in sections}
-        valid_actions = {
-            action_identity
-            for section_identity, section in sections
-            for action_identity, _ in _action_entries(section, section_identity)
-        }
-        self._expanded_sections.intersection_update(valid_sections)
-        self._expanded_actions.intersection_update(valid_actions)
-        self._detail_filters = {
-            identity: value
-            for identity, value in self._detail_filters.items()
-            if identity in valid_actions
-        }
+
+def _opens_by_default(section: PanelSection) -> bool:
+    return section.alert or section.role == "urgent"
 
 
 def _section_entries(
@@ -276,6 +282,7 @@ def _document_structure(
         (
             section.identity,
             section.section.alert,
+            section.open,
             section.expanded,
             panel_rows_structure(section.rows),
             section.hidden_count > 0,

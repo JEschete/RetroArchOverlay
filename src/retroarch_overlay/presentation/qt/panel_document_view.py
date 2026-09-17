@@ -6,7 +6,6 @@ from PySide6.QtCore import QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFrame,
-    QLabel,
     QLineEdit,
     QPushButton,
     QScrollArea,
@@ -123,6 +122,7 @@ class PanelSectionWidget(QFrame):
         on_toggle_action: Callable[[ActionIdentity], None],
         on_filter_action: Callable[[ActionIdentity, str], None],
         parent: QWidget | None = None,
+        on_toggle_open: Callable[[SectionIdentity], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setSizePolicy(
@@ -133,16 +133,18 @@ class PanelSectionWidget(QFrame):
         self._on_toggle_section = on_toggle_section
         self._on_toggle_action = on_toggle_action
         self._on_filter_action = on_filter_action
+        self._on_toggle_open = on_toggle_open
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(8, 8, 8, 8)
-        self._layout.setSpacing(5)
-        self.title_label = QLabel(self)
-        self.title_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByKeyboard
-            | Qt.TextInteractionFlag.TextSelectableByMouse
-        )
-        self._layout.addWidget(self.title_label)
+        self._layout.setContentsMargins(8, 6, 8, 6)
+        self._layout.setSpacing(4)
+        self.header_button = QPushButton(self)
+        self.header_button.setObjectName("panelSectionHeader")
+        self.header_button.setCheckable(True)
+        self.header_button.setFlat(True)
+        self.header_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.header_button.clicked.connect(self._toggle_open)
+        self._layout.addWidget(self.header_button)
         self.row_view = PanelRowListView(parent=self)
         self.row_view.content_height_changed.connect(self.schedule_fit_to_contents)
         self._layout.addWidget(self.row_view)
@@ -163,17 +165,24 @@ class PanelSectionWidget(QFrame):
     def set_view(self, view: PanelSectionView) -> None:
         self.identity = view.identity
         self.setProperty("alert", view.section.alert)
-        self.title_label.setText(view.section.title)
-        self.title_label.setAccessibleName(view.section.title)
+        with QSignalBlocker(self.header_button):
+            self.header_button.setChecked(view.open)
+        arrow = "▾" if view.open else "▸"
+        self.header_button.setText(f"{arrow} {view.section.title}")
+        self.header_button.setAccessibleName(
+            f"{view.section.title}; {'expanded' if view.open else 'collapsed'}"
+        )
         self.row_view.setAccessibleName(f"{view.section.title} rows")
         self.row_view.set_rows(view.rows)
+        self.row_view.setVisible(bool(view.rows))
         _fit_row_view(self.row_view)
-        show_preview = view.hidden_count > 0 or view.expanded
+        show_preview = view.open and (view.hidden_count > 0 or view.expanded)
         self.preview_button.setVisible(show_preview)
         if show_preview:
             text = f"Show {view.hidden_count} more" if view.hidden_count else "Show less"
             self.preview_button.setText(text)
             self.preview_button.setAccessibleName(f"{text} in {view.section.title}")
+        self._actions_host.setVisible(view.open and bool(view.actions))
         self._reconcile_actions(view.actions)
         self._apply_section_palette(view.section.alert)
         self.fit_to_contents()
@@ -221,6 +230,10 @@ class PanelSectionWidget(QFrame):
     def _toggle_section(self) -> None:
         self._on_toggle_section(self.identity)
 
+    def _toggle_open(self) -> None:
+        if self._on_toggle_open is not None:
+            self._on_toggle_open(self.identity)
+
     def schedule_fit_to_contents(self) -> None:
         if not self._fit_timer.isActive():
             self._fit_timer.start(0)
@@ -254,12 +267,11 @@ class PanelSectionWidget(QFrame):
             palette.setColor(palette.ColorRole.WindowText, QColor(colors["foreground"]))
         self.setAutoFillBackground(True)
         self.setPalette(palette)
-        title_palette = self.title_label.palette()
-        title_palette.setColor(
-            title_palette.ColorRole.WindowText,
-            QColor(title_foreground),
+        self.header_button.setStyleSheet(
+            "QPushButton#panelSectionHeader { text-align: left; border: 0;"
+            " padding: 2px 0; font-weight: 600; background: transparent;"
+            f" color: {title_foreground}; }}"
         )
-        self.title_label.setPalette(title_palette)
         row_palette = self.row_view.palette()
         row_palette.setColor(row_palette.ColorRole.Base, QColor(section_background))
         row_palette.setColor(row_palette.ColorRole.Window, QColor(section_background))
@@ -342,6 +354,7 @@ class PanelDocumentView(QScrollArea):
                     self._toggle_action,
                     self._filter_action,
                     self._content,
+                    on_toggle_open=self._toggle_section_open,
                 )
                 self._section_widgets[view.identity] = widget
             self._layout.removeWidget(widget)
@@ -372,6 +385,10 @@ class PanelDocumentView(QScrollArea):
 
     def _toggle_section(self, identity: SectionIdentity) -> None:
         self.state.toggle_section(identity)
+        self._apply_views()
+
+    def _toggle_section_open(self, identity: SectionIdentity) -> None:
+        self.state.toggle_section_open(identity)
         self._apply_views()
 
     def _toggle_action(self, identity: ActionIdentity) -> None:

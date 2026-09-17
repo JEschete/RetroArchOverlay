@@ -43,7 +43,11 @@ def test_native_controls_toggle_section_action_and_filter(qtbot) -> None:
     status_state = view.state.section_views[0]
     status = view.section_widget(status_state.identity)
     assert status is not None
+    assert not status.preview_button.isVisible()
 
+    status.header_button.click()
+    assert view.state.section_views[0].open
+    assert status.header_button.text() == "▾ Status 10"
     status.preview_button.click()
     status_state = view.state.section_views[0]
     assert status_state.expanded
@@ -89,6 +93,26 @@ def test_sections_use_content_height_instead_of_stretching(qtbot) -> None:
     )
 
 
+def test_closed_sections_show_one_summary_row_until_header_is_clicked(qtbot) -> None:
+    view = PanelDocumentView()
+    view.resize(360, 500)
+    qtbot.addWidget(view)
+    view.show()
+    view.set_snapshot(_view_snapshot())
+    status_state = view.state.section_views[0]
+    status = view.section_widget(status_state.identity)
+    assert status is not None
+
+    assert status.header_button.text() == "▸ Status 10"
+    assert status.row_view.row_model.rowCount() == 1
+    assert not status._actions_host.isVisible()
+
+    status.header_button.click()
+
+    qtbot.waitUntil(status._actions_host.isVisible)
+    assert status.row_view.row_model.rowCount() == 4
+
+
 def test_outer_document_owns_vertical_scrolling(qtbot) -> None:
     view = PanelDocumentView()
     view.resize(360, 320)
@@ -102,6 +126,7 @@ def test_outer_document_owns_vertical_scrolling(qtbot) -> None:
                 PanelSection(
                     "Long section",
                     tuple(PanelRow(f"Row {index:03}") for index in range(50)),
+                    role="urgent",
                     key="long",
                 ),
             ),
@@ -121,6 +146,7 @@ def test_value_snapshot_reuses_widgets_and_preserves_interaction_state(qtbot) ->
     view.show()
     view.set_snapshot(_view_snapshot())
     status_state = view.state.section_views[0]
+    view.state.toggle_section_open(status_state.identity)
     view.state.toggle_section(status_state.identity)
     view.state.toggle_action(status_state.actions[0].identity)
     view.state.set_action_filter(status_state.actions[0].identity, "Detail 17")
@@ -162,6 +188,7 @@ def test_content_scope_change_rebuilds_widgets_and_resets_scroll(qtbot) -> None:
     first_state = view.state.section_views[0]
     first_widget = view.section_widget(first_state.identity)
     assert first_widget is not None
+    view.state.toggle_section_open(first_state.identity)
     view.state.toggle_section(first_state.identity)
     view.state.toggle_action(first_state.actions[0].identity)
     view.state.set_action_filter(first_state.actions[0].identity, "Detail 17")
@@ -177,6 +204,7 @@ def test_content_scope_change_rebuilds_widgets_and_resets_scroll(qtbot) -> None:
     assert result is PanelDocumentUpdate.CONTENT_SCOPE
     assert second_widget is not None
     assert second_widget is not first_widget
+    assert not second_state.open
     assert not second_state.expanded
     assert not second_state.actions[0].expanded
     assert second_state.actions[0].filter_text == ""
