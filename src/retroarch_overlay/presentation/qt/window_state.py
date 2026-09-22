@@ -166,6 +166,44 @@ def save_named_window_geometry(
     return rect
 
 
+def ensure_frame_on_screen(window: QWidget) -> None:
+    """Moves or shrinks a shown window so its title bar and frame stay reachable.
+
+    Saved geometry is the client area, so a window restored at the top of the
+    work area would otherwise place its title bar above the screen.
+    """
+    screen = window.screen() or QGuiApplication.primaryScreen()
+    if screen is None:
+        return
+    area = screen.availableGeometry()
+    frame = window.frameGeometry()
+    client = window.geometry()
+    left_margin = client.left() - frame.left()
+    top_margin = client.top() - frame.top()
+    right_margin = frame.right() - client.right()
+    bottom_margin = frame.bottom() - client.bottom()
+    width = max(
+        window.minimumWidth(),
+        min(client.width(), area.width() - left_margin - right_margin),
+    )
+    height = max(
+        window.minimumHeight(),
+        min(client.height(), area.height() - top_margin - bottom_margin),
+    )
+    frame_width = width + left_margin + right_margin
+    frame_height = height + top_margin + bottom_margin
+    left = min(max(frame.left(), area.left()), area.left() + area.width() - frame_width)
+    top = min(max(frame.top(), area.top()), area.top() + area.height() - frame_height)
+    target = QRect(
+        max(left, area.left()) + left_margin,
+        max(top, area.top()) + top_margin,
+        width,
+        height,
+    )
+    if target != client:
+        window.setGeometry(target)
+
+
 def _qt_work_areas() -> tuple[ScreenRect, ...]:
     return tuple(
         _screen_rect(screen.availableGeometry())

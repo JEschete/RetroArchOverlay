@@ -13,10 +13,8 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QListWidget,
     QPushButton,
     QSlider,
-    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -26,13 +24,12 @@ from ...core.models import (
     MapDocument,
     MapOverlay,
     MapPosition,
-    MapRegion,
-    MapWaypoint,
 )
 from .map_view import QtMapView
 from .theme import apply_qt_theme
 from .window_state import (
     WindowStateSettings,
+    ensure_frame_on_screen,
     restore_named_window_geometry,
     save_named_window_geometry,
 )
@@ -85,7 +82,6 @@ class QtMapWindow(QWidget):
         self._pending_position: MapPosition | None = None
         self._pending_overlays: tuple[MapOverlay, ...] = ()
         self._shutting_down = False
-        self._marker_objects: list[MapWaypoint | MapRegion] = []
         self.setWindowTitle(f"{document.title} {'Minimap' if compact else 'Map'}")
         self.setAccessibleName(self.windowTitle())
         self.resize(184, 208) if compact else self.resize(760, 800)
@@ -177,22 +173,8 @@ class QtMapWindow(QWidget):
         self.heading.setContentsMargins(10, 6, 10, 6)
         self.heading.setAccessibleDescription("Map location")
         layout.addWidget(self.heading)
-        splitter = QSplitter(Qt.Orientation.Horizontal, self)
-        splitter.addWidget(self.map_view)
-        self.marker_list = QListWidget(splitter)
-        self.marker_list.setAccessibleName("Visible map markers")
-        self.marker_list.setWordWrap(True)
-        self.marker_list.setTextElideMode(Qt.TextElideMode.ElideNone)
-        self.marker_list.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
-        self.marker_list.setMinimumWidth(220)
-        self.marker_list.currentRowChanged.connect(self._marker_selected)
-        splitter.addWidget(self.marker_list)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 0)
-        splitter.setSizes((560, 200))
-        layout.addWidget(splitter, 1)
+        # Marker details are available as map tooltips; the map gets the width.
+        layout.addWidget(self.map_view, 1)
         self.credit_button = QPushButton(self)
         self.credit_button.setFlat(True)
         self.credit_button.setAccessibleName("Open map source")
@@ -202,7 +184,6 @@ class QtMapWindow(QWidget):
         if compact:
             self.toolbar.hide()
             self.overlay_bar.hide()
-            self.marker_list.hide()
             self.credit_button.hide()
             self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.set_theme(theme)
@@ -237,6 +218,7 @@ class QtMapWindow(QWidget):
     def show_map(self) -> None:
         self.show()
         self.raise_()
+        ensure_frame_on_screen(self)
         self._apply_pending_map()
 
     def toggle(self) -> None:
@@ -314,7 +296,6 @@ class QtMapWindow(QWidget):
         self.credit_button.setText(layer.credit)
         self.credit_button.setVisible(bool(layer.credit) and not self.compact)
         self._sync_layer_combo(layer.key)
-        self._rebuild_marker_list()
 
     def _sync_layer_combo(self, key: str) -> None:
         index = self.layer_combo.findData(key)
@@ -328,17 +309,14 @@ class QtMapWindow(QWidget):
         self.map_view.set_layer(key, render=self.isVisible())
         if self.isVisible() and self._pending_position is not None:
             self.map_view.update_map(self._pending_position, self._pending_overlays)
-            self._rebuild_marker_list()
         self._view_changed()
 
     def _overlay_changed(self, kind: str, visible: bool) -> None:
         self.map_view.set_overlay_visible(kind, visible)
-        self._rebuild_marker_list()
         self._view_changed()
 
     def _hide_completed_changed(self, hidden: bool) -> None:
         self.map_view.set_hide_completed(hidden)
-        self._rebuild_marker_list()
         self._view_changed()
 
     def _opacity_changed(self, value: int) -> None:
@@ -351,29 +329,6 @@ class QtMapWindow(QWidget):
 
     def map_view_recenter(self) -> None:
         self.map_view.recenter()
-
-    def _rebuild_marker_list(self) -> None:
-        with QSignalBlocker(self.marker_list):
-            self.marker_list.clear()
-            self._marker_objects = [
-                *self.map_view.visible_waypoints(),
-                *self.map_view.visible_regions(),
-            ]
-            for marker in self._marker_objects:
-                detail = f" · {marker.detail}" if marker.detail else ""
-                completed = " · complete" if isinstance(marker, MapWaypoint) and marker.completed else ""
-                text = f"{marker.title}{detail}{completed}"
-                self.marker_list.addItem(text)
-                self.marker_list.item(self.marker_list.count() - 1).setToolTip(text)
-
-    def _marker_selected(self, row: int) -> None:
-        if not 0 <= row < len(self._marker_objects):
-            return
-        marker = self._marker_objects[row]
-        if isinstance(marker, MapWaypoint):
-            self.map_view.center_on_waypoint(marker)
-        else:
-            self.map_view.center_on_region(marker)
 
     def _open_source(self) -> None:
         source = self.map_view.current_layer.source_url

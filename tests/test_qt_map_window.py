@@ -104,7 +104,7 @@ def test_restores_existing_view_schema_and_legacy_geometry(qtbot, tmp_path: Path
     assert reloaded.window_geometry("map") == ScreenRect(20, 30, 420, 630)
 
 
-def test_controls_update_state_and_marker_list_navigation(qtbot, tmp_path: Path) -> None:
+def test_controls_update_state(qtbot, tmp_path: Path) -> None:
     changes = Mock()
     owner = QWidget()
     qtbot.addWidget(owner)
@@ -117,16 +117,12 @@ def test_controls_update_state_and_marker_list_navigation(qtbot, tmp_path: Path)
     window.overlay_checks["collectibles"].setChecked(True)
     window.hide_completed.setChecked(True)
     window.opacity_slider.setValue(75)
-    centers = []
-    window.map_view.center_on_waypoint = lambda marker: centers.append(marker.title)  # type: ignore[method-assign]
-    window.marker_list.setCurrentRow(0)
 
     state = window.view_state()
     assert state["overlays"]["collectibles"] is True  # type: ignore[index]
     assert state["hide_completed"] is True
     assert state["opacity"] == 0.75
     assert "Chest" not in [item.title for item in window.map_view.visible_waypoints()]
-    assert centers
     assert changes.call_count >= 3
     window.shutdown()
 
@@ -162,7 +158,6 @@ def test_compact_window_hides_controls_and_close_only_hides(qtbot, tmp_path: Pat
 
     assert window.toolbar.isHidden()
     assert window.overlay_bar.isHidden()
-    assert window.marker_list.isHidden()
     assert window.map_view.overlay_visibility["collectibles"]
     assert window.map_view.overlay_visibility["npcs"]
     assert not window.map_view.overlay_visibility["encounters"]
@@ -196,25 +191,34 @@ def test_control_changes_persist_immediately_with_existing_schema(
     window.shutdown()
 
 
-def test_visible_markers_are_exposed_as_accessible_list_items(qtbot, tmp_path: Path) -> None:
+def test_map_fills_the_window_without_a_marker_text_column(qtbot, tmp_path: Path) -> None:
     owner = QWidget()
     qtbot.addWidget(owner)
     window = QtMapWindow(owner, _document(tmp_path))
-    window.update_map(
-        MapPosition("Outside", 0, 1, 1, True),
-        (MapOverlay("world", (MapWaypoint(3, 3, "Objective", kind="objective"),)),),
-    )
+    window.resize(600, 500)
+    window.update_map(MapPosition("Outside", 0, 1, 1, True))
     window.show_map()
-    interface = QAccessible.queryAccessibleInterface(window.marker_list)
 
-    assert interface is not None
-    assert interface.role() == QAccessible.Role.List
-    names = {
-        interface.child(index).text(QAccessible.Text.Name)
-        for index in range(interface.childCount())
-    }
-    assert "Shop · Items" in names
-    assert "Objective" in names
+    assert not hasattr(window, "marker_list")
+    assert window.layout().indexOf(window.map_view) >= 0
+    assert window.map_view.width() >= window.width() - 4
+    window.shutdown()
+
+
+def test_restored_window_keeps_its_frame_inside_the_work_area(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    owner = QWidget()
+    qtbot.addWidget(owner)
+    window = QtMapWindow(owner, _document(tmp_path))
+    area = window.screen().availableGeometry()
+    window.setGeometry(area.left(), area.top() - 40, 400, area.height() + 200)
+    window.show_map()
+
+    frame = window.frameGeometry()
+    assert frame.top() >= area.top()
+    assert frame.bottom() <= area.bottom()
     window.shutdown()
 
 
@@ -232,42 +236,6 @@ def test_overlay_controls_use_multiple_rows_at_default_width(qtbot, tmp_path: Pa
 
     assert len(positions) >= 2
     assert window.overlay_bar.sizeHint().width() <= window.width()
-    window.shutdown()
-
-
-def test_long_marker_rows_wrap_and_keep_full_tooltip(qtbot, tmp_path: Path) -> None:
-    long_detail = (
-        "Entrance at (24,88) with a deliberately long description that must wrap"
-    )
-    document = _document(tmp_path)
-    layer = document.layers[0]
-    document = MapDocument(
-        document.title,
-        (
-            MapLayer(
-                layer.key,
-                layer.title,
-                layer.area,
-                layer.image_path,
-                waypoints=(MapWaypoint(1, 1, "Ali(a)han Town", long_detail),),
-            ),
-        ),
-    )
-    owner = QWidget()
-    qtbot.addWidget(owner)
-    window = QtMapWindow(owner, document)
-    window.resize(500, 500)
-    window.update_map(MapPosition("Outside", 0, 1, 1, True))
-    window.show_map()
-    qtbot.waitUntil(lambda: window.marker_list.count() == 1)
-    item = window.marker_list.item(0)
-
-    assert item.toolTip() == f"Ali(a)han Town · {long_detail}"
-    assert window.marker_list.wordWrap()
-    assert window.marker_list.textElideMode() == Qt.TextElideMode.ElideNone
-    assert window.marker_list.visualItemRect(item).height() > (
-        window.marker_list.fontMetrics().height() + 4
-    )
     window.shutdown()
 
 
