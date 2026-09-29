@@ -44,6 +44,66 @@ from ...core.models import (
 )
 
 
+MARKER_STYLES = {
+    "shop": ("#16817a", "$", "diamond"),
+    "service": ("#3d6da8", "+", "square"),
+    "quest": ("#d38a17", "!", "triangle"),
+    "item": ("#f0b429", "*", "triangle"),
+    "boss": ("#b83232", "X", "circle"),
+    "building": ("#7c5cbf", "B", "square"),
+    "person": ("#6b7280", "", "circle"),
+    "chest": ("#a65f1f", "C", "chest"),
+    "pot": ("#8a6f47", "O", "circle"),
+    "drawer": ("#9c6b30", "D", "square"),
+    "search": ("#d38a17", "?", "diamond"),
+    "exit": ("#3d6da8", "E", "diamond"),
+    "stairs-up": ("#16817a", "^", "triangle"),
+    "stairs-down": ("#276749", "v", "triangle-down"),
+    "travel-door": ("#7c5cbf", "T", "diamond"),
+    "healing": ("#2f855a", "H", "circle"),
+    "thief-door": ("#8b5e34", "L", "square"),
+    "magic-door": ("#4968a6", "M", "square"),
+    "transition": ("#5b6f8f", "R", "diamond"),
+    "npc": ("#6b7280", "N", "circle"),
+    "encounter": ("#b83232", "!", "triangle"),
+    "location": ("#286f6c", "@", "diamond"),
+    "map-entity": ("#6b7280", "P", "circle"),
+    "town": ("#16817a", "Y", "diamond"),
+    "castle": ("#7c5cbf", "K", "square"),
+    "cave": ("#4b5563", "V", "triangle-down"),
+    "tower": ("#3d6da8", "W", "triangle"),
+    "shrine": ("#d38a17", "S", "diamond"),
+    "tunnel": ("#59524a", "U", "circle"),
+    "settlement": ("#2f855a", "A", "square"),
+    "special-location": ("#a65f1f", "*", "diamond"),
+    "water-location": ("#2b6cb0", "~", "circle"),
+    "palace": ("#8f3f71", "Q", "square"),
+    "lair": ("#8b1e2d", "Z", "triangle-down"),
+}
+ENTITY_MARKER_COLORS = (
+    "#3d6da8",
+    "#16817a",
+    "#7c5cbf",
+    "#d38a17",
+    "#b83232",
+)
+ENTITY_MARKER_SHAPES = ("circle", "diamond", "square", "triangle")
+
+
+def _marker_style(marker: str) -> tuple[str, str, str]:
+    if marker.startswith("map-entity:"):
+        try:
+            index = max(1, int(marker.partition(":")[2]))
+        except ValueError:
+            index = 1
+        return (
+            ENTITY_MARKER_COLORS[(index - 1) % len(ENTITY_MARKER_COLORS)],
+            str(index),
+            ENTITY_MARKER_SHAPES[(index - 1) % len(ENTITY_MARKER_SHAPES)],
+        )
+    return MARKER_STYLES.get(marker, ("#6b7280", "", "circle"))
+
+
 class QtMapImageCache:
     def __init__(self, maximum_entries: int = 4) -> None:
         if maximum_entries <= 0:
@@ -575,17 +635,9 @@ class QtMapView(QGraphicsView):
                 item.setData(1, "dot")
             else:
                 marker = waypoint.marker or "person"
-                marker_color, symbol = {
-                    "shop": ("#16817a", "$"),
-                    "service": ("#3d6da8", "+"),
-                    "quest": ("#d38a17", "!"),
-                    "item": ("#f0b429", "*"),
-                    "boss": ("#b83232", "X"),
-                    "building": ("#7c5cbf", "B"),
-                    "person": ("#6b7280", ""),
-                }.get(marker, ("#6b7280", ""))
+                marker_color, symbol, shape = _marker_style(marker)
                 fill = QColor("#767b77" if waypoint.completed else marker_color)
-                if marker == "shop":
+                if shape == "diamond":
                     item = self._map_scene.addPolygon(
                         QPolygonF(
                             (
@@ -598,30 +650,30 @@ class QtMapView(QGraphicsView):
                         QPen(QColor("#ffffff"), 1),
                         fill,
                     )
-                    shape = "diamond"
-                elif marker in {"quest", "item"}:
+                elif shape in {"triangle", "triangle-down"}:
+                    vertical = -6 if shape == "triangle" else 6
+                    base = 5 if shape == "triangle" else -5
                     item = self._map_scene.addPolygon(
                         QPolygonF(
                             (
-                                QPointF(0, -6),
-                                QPointF(6, 5),
-                                QPointF(-6, 5),
+                                QPointF(0, vertical),
+                                QPointF(6, base),
+                                QPointF(-6, base),
                             )
                         ),
                         QPen(QColor("#ffffff"), 1),
                         fill,
                     )
-                    shape = "triangle"
-                elif marker in {"service", "building"}:
+                elif shape in {"square", "chest"}:
+                    half_height = 4 if shape == "chest" else 5
                     item = self._map_scene.addRect(
                         -5,
-                        -5,
+                        -half_height,
                         10,
-                        10,
+                        half_height * 2,
                         QPen(QColor("#ffffff"), 1),
                         fill,
                     )
-                    shape = "square"
                 else:
                     item = self._map_scene.addEllipse(
                         -5,
@@ -631,7 +683,6 @@ class QtMapView(QGraphicsView):
                         QPen(QColor("#ffffff"), 1),
                         fill,
                     )
-                    shape = "circle"
                 item.setData(1, shape)
                 item.setData(2, symbol)
             item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
@@ -641,21 +692,21 @@ class QtMapView(QGraphicsView):
             items.append(item)
             symbol = str(item.data(2) or "")
             if symbol:
-                text = self._map_scene.addSimpleText(symbol)
+                text = QGraphicsSimpleTextItem(symbol, item)
+                if marker.startswith("map-entity:"):
+                    font = text.font()
+                    font.setPixelSize(7)
+                    text.setFont(font)
                 text.setBrush(QColor("#ffffff"))
-                text.setFlag(
-                    QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations
-                )
                 bounds = text.boundingRect()
                 text.setPos(
-                    source_x + offset_x - bounds.width() / 2,
-                    source_y + offset_y - bounds.height() / 2,
+                    -bounds.x() - bounds.width() / 2,
+                    -bounds.y() - bounds.height() / 2,
                 )
                 text.setToolTip(_tooltip(waypoint.title, waypoint.detail))
-                text.setZValue(12)
+                text.setZValue(2)
                 text.setData(1, "symbol")
                 text.setData(2, symbol)
-                items.append(text)
         return items
 
     def _update_player_items(self) -> None:

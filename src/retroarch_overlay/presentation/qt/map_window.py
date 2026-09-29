@@ -44,6 +44,7 @@ OVERLAY_LABELS = {
     "entrance": "Entrances",
     "collectibles": "Collectibles",
     "npcs": "NPCs",
+    "entities": "Entities",
     "encounters": "Enemies",
 }
 

@@ -489,3 +489,76 @@ def test_generic_marker_shapes_symbols_and_encounter_labels_are_preserved(
         getattr(item, "text", lambda: "")() == "Slime Lv 1"
         for item in view.scene().items()
     )
+
+
+def test_entity_marker_symbols_are_distinct_and_centered_on_their_icons(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    path = _image(tmp_path / "world.png")
+    markers = (
+        "chest",
+        "pot",
+        "drawer",
+        "search",
+        "exit",
+        "stairs-up",
+        "stairs-down",
+        "travel-door",
+        "healing",
+        "thief-door",
+        "magic-door",
+        "transition",
+        "npc",
+        "encounter",
+        "location",
+        "map-entity:1",
+        "map-entity:2",
+        "town",
+        "castle",
+        "cave",
+        "tower",
+        "shrine",
+        "tunnel",
+        "settlement",
+        "special-location",
+        "water-location",
+        "palace",
+        "lair",
+    )
+    layer = MapLayer(
+        "world",
+        "World",
+        "Outside",
+        path,
+        anchor_x=8,
+        anchor_y=8,
+        waypoints=tuple(
+            MapWaypoint(index % 4, index // 4, marker, marker=marker)
+            for index, marker in enumerate(markers)
+        ),
+    )
+    view = QtMapView(MapDocument("Map", (layer,)))
+    qtbot.addWidget(view)
+
+    view.update_map(MapPosition("Outside", 0, 1, 1, True))
+    view.set_zoom(4)
+
+    symbol_items = {
+        item.toolTip(): item
+        for item in view.scene().items()
+        if item.data(1) == "symbol"
+    }
+    assert set(symbol_items) == set(markers)
+    assert len({str(item.data(2)) for item in symbol_items.values()}) == len(markers)
+    chest = next(
+        item
+        for item in view.scene().items()
+        if item.toolTip() == "chest" and item.data(1) == "chest"
+    )
+    assert (chest.pos().x(), chest.pos().y()) == (8, 8)
+    for item in symbol_items.values():
+        assert item.parentItem() is not None
+        centered = item.pos() + item.boundingRect().center()
+        assert abs(centered.x()) < 0.01
+        assert abs(centered.y()) < 0.01
