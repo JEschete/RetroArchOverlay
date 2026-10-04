@@ -26,6 +26,7 @@ def qt_palette(preference: str) -> tuple[str, QPalette]:
         QColor(accessible_text_color(colors["accent"], colors["header_foreground"])),
     )
     palette.setColor(QPalette.ColorRole.Link, QColor(colors["accent"]))
+    palette.setColor(QPalette.ColorRole.LinkVisited, QColor(colors["accent"]))
     palette.setColor(QPalette.ColorRole.BrightText, QColor(colors["danger"]))
     return name, palette
 
@@ -65,7 +66,7 @@ def qt_style_sheet(preference: str) -> str:
         QScrollArea, QListView {{
             background: {colors['background']};
         }}
-        QTableView, QPlainTextEdit, QComboBox {{
+        QTableView, QPlainTextEdit, QTextBrowser, QComboBox {{
             background: {colors['background']};
             color: {colors['foreground']};
             border: 1px solid {colors['divider']};
@@ -109,29 +110,29 @@ def qt_style_sheet(preference: str) -> str:
             selection-background-color: {colors['accent']};
             selection-color: {selected_text};
         }}
-        QPushButton {{
+        QPushButton, QToolButton {{
             background: {colors['surface']};
             color: {colors['foreground']};
             border: 2px solid {colors['divider']};
             border-radius: 3px;
             padding: 5px 8px;
         }}
-        QPushButton:hover, QPushButton:focus {{
+        QPushButton:hover, QPushButton:focus, QToolButton:hover, QToolButton:focus {{
             border-color: {colors['accent']};
         }}
-        QPushButton:checked {{
+        QPushButton:checked, QToolButton:checked {{
             background: {colors['accent']};
             color: {selected_text};
             border-color: {colors['accent']};
         }}
-        QLineEdit, QPlainTextEdit, QComboBox {{
+        QLineEdit, QPlainTextEdit, QComboBox, QSpinBox {{
             background: {colors['background']};
             color: {colors['foreground']};
             border: 2px solid {colors['divider']};
             border-radius: 3px;
             padding: 4px 6px;
         }}
-        QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus {{
+        QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus {{
             border-color: {colors['accent']};
         }}
         QToolTip {{

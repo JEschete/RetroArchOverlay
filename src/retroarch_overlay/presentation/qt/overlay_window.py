@@ -60,6 +60,7 @@ from .window_state import (
 
 ROLE_NAMES = ("all", "area", "party", "goals")
 MANAGED_PRIMARY_MODES = frozenset({"rail", "dual-strips", "pause-drawer"})
+MAP_RETIRE_GRACE_MS = 15_000
 LOGGER = logging.getLogger(__name__)
 
 
@@ -134,6 +135,9 @@ class QtOverlayWindow(QMainWindow):
         self._map_overlays: tuple[MapOverlay, ...] = ()
         self._map_window: QtMapWindow | None = None
         self._minimap_window: QtMapWindow | None = None
+        self._map_retire_timer = QTimer(self)
+        self._map_retire_timer.setSingleShot(True)
+        self._map_retire_timer.timeout.connect(self._destroy_map_windows)
         self._hero_paths: dict[str, list[tuple[int, int]]] = {}
         self._hero_paths_title = ""
         self._animate_map_objectives = animate_map_objectives
@@ -233,6 +237,8 @@ class QtOverlayWindow(QMainWindow):
         layout.addWidget(self.urgent_strip)
 
         self.document_view = PanelDocumentView(central)
+        self.document_view.map_navigation_requested.connect(self._browse_map_layer)
+        self.document_view.action_failed.connect(lambda message: self.statusBar().showMessage(message, 5000))
         self.document_view.hide()
         layout.addWidget(self.document_view, 1)
 
@@ -671,14 +677,17 @@ class QtOverlayWindow(QMainWindow):
     def _sync_map_tools(self, snapshot: OverlaySnapshot) -> None:
         position = snapshot.map_position
         document = snapshot.map_document
-        if position is None or document is None:
+        if document is None:
             self._clear_map_tools()
             return
+        self._map_retire_timer.stop()
         if document != self._map_document:
             if self._map_document is not None and document.title != self._map_document.title:
                 self._save_hero_paths()
                 self._hero_paths = {}
-            self._destroy_map_windows()
+            windows = tuple(window for window in (self._map_window, self._minimap_window) if window is not None)
+            if any(not window.update_document(document) for window in windows):
+                self._destroy_map_windows()
         if document.title != self._hero_paths_title:
             self._save_hero_paths()
             self._hero_paths = (
@@ -690,11 +699,13 @@ class QtOverlayWindow(QMainWindow):
         self._map_document = document
         self._map_position = position
         self._map_overlays = snapshot.map_overlays
-        record_map_path(document, position, self._hero_paths)
+        if position is not None:
+            record_map_path(document, position, self._hero_paths)
         for window in (self._map_window, self._minimap_window):
             if window is not None:
                 window.map_view.set_hero_paths(self._hero_paths)
-                window.update_map(position, self._map_overlays)
+                if position is not None:
+                    window.update_map(position, self._map_overlays)
 
     def _clear_map_tools(self) -> None:
         self._map_document = None
@@ -702,7 +713,12 @@ class QtOverlayWindow(QMainWindow):
         self._map_overlays = ()
         self.map_button.hide()
         self.minimap_button.hide()
-        self._destroy_map_windows()
+        # Area transitions and brief read failures arrive without map data.
+        # Open map windows survive the gap and are retired only if it lasts.
+        if (
+            self._map_window is not None or self._minimap_window is not None
+        ) and not self._map_retire_timer.isActive():
+            self._map_retire_timer.start(MAP_RETIRE_GRACE_MS)
 
     def _show_map(self) -> None:
         if self._map_document is None or self._map_position is None:
@@ -718,6 +734,19 @@ class QtOverlayWindow(QMainWindow):
             )
         self._map_window.update_map(self._map_position, self._map_overlays)
         self._map_window.toggle()
+
+    def _browse_map_layer(self, key: str) -> None:
+        if self._map_document is None or key not in {layer.key for layer in self._map_document.layers}:
+            return
+        if self._map_window is None:
+            self._show_map()
+        if self._map_window is None:
+            return
+        try:
+            self._map_window.map_view.browse_layer(key)
+            self._map_window.show_map()
+        except (OSError, ValueError) as error:
+            self._map_window.heading.setText(f"Map unavailable · {error}")
 
     def _show_minimap(self) -> None:
         if self._map_document is None or self._map_position is None:
@@ -736,6 +765,7 @@ class QtOverlayWindow(QMainWindow):
         self._minimap_window.toggle()
 
     def _destroy_map_windows(self) -> None:
+        self._map_retire_timer.stop()
         for window in (self._map_window, self._minimap_window):
             if window is not None:
                 window.shutdown()

@@ -3,6 +3,9 @@ from unittest.mock import Mock
 
 import pytest
 from PIL import Image
+from dataclasses import replace
+
+from retroarch_overlay.core.map import map_source_point, waypoint_source_point
 
 from retroarch_overlay.core.models import (
     MapDocument,
@@ -77,6 +80,61 @@ def test_nonwrapping_layer_uses_one_image_and_one_player(qtbot, tmp_path: Path) 
 
     assert view.image_item_count == 1
     assert view.player_scene_positions == ((32.0, 48.0),)
+
+
+def test_location_change_resumes_following_after_manual_browsing(qtbot, tmp_path: Path) -> None:
+    path = _image(tmp_path / "atlas.png")
+    layers = (
+        MapLayer("world", "World", "Outside", path),
+        MapLayer("town-0", "Town floor 0", "Town", path, map_id=0x100),
+        MapLayer("town-1", "Town floor 1", "Town", path, map_id=0x101),
+    )
+    view = QtMapView(MapDocument("Atlas", layers))
+    qtbot.addWidget(view)
+    view.update_map(MapPosition("Outside", 0, 1, 1, True))
+    view.browse_layer("town-1")
+    view.update_map(MapPosition("Outside", 0x99, 2, 1, True))
+    assert view.layer_key == "town-1"
+    assert view.position is None
+
+    view.update_map(MapPosition("Town", 0x100, 1, 2))
+    assert view.layer_key == "town-0"
+    assert view.player_scene_positions == ((16.0, 32.0),)
+    view.browse_layer("world")
+    view.update_map(MapPosition("Town", 0x101, 2, 3))
+    assert view.layer_key == "town-1"
+    assert view.player_scene_positions == ((32.0, 48.0),)
+    view.update_map(MapPosition("Outside", 0, 3, 1, True))
+    assert view.layer_key == "world"
+
+
+def test_nonwrapping_marker_coordinates_are_not_folded_into_another_tile() -> None:
+    layer = MapLayer("area", "Area", "Inside", Path("area.png"),
+                     wrap_width=4, wrap_height=4, anchor_x=8, anchor_y=8)
+    waypoint = MapWaypoint(10, 1, "Actor")
+    position = MapPosition("Inside", 0, 10, 1)
+    assert waypoint_source_point(waypoint, layer) == (168, 24)
+    assert map_source_point(position, layer) == (168, 24)
+    assert waypoint_source_point(waypoint, replace(layer, wraps=True)) == (40, 24)
+
+
+def test_live_palette_document_refresh_preserves_zoom_and_visibility(qtbot, tmp_path: Path) -> None:
+    first = _image(tmp_path / "day.png", (20, 80, 40))
+    second = _image(tmp_path / "night.png", (20, 30, 70))
+    layer = MapLayer("area", "Area", "Inside", first, map_id=1)
+    view = QtMapView(MapDocument("Atlas", (layer,), ("locks",)))
+    qtbot.addWidget(view)
+    view.resize(320, 300)
+    view.show()
+    view.update_map(MapPosition("Inside", 1, 1, 1))
+    view.set_zoom(4)
+    view.set_overlay_visible("locks", False)
+    before = view.static_build_count
+    view.update_document(MapDocument("Atlas", (replace(layer, image_path=second),), ("locks",)))
+    assert view.zoom == 4
+    assert not view.overlay_visibility["locks"]
+    assert view.static_build_count == before + 1
+    assert view.current_layer.image_path == second
 
 
 def test_unknown_indoor_map_retains_last_world_layer(qtbot, tmp_path: Path) -> None:

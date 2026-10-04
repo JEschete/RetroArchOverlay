@@ -1,6 +1,7 @@
 from retroarch_overlay.core.models import (
     OverlaySnapshot,
     PanelAction,
+    PanelNumberInput,
     PanelRow,
     PanelSection,
 )
@@ -56,6 +57,19 @@ def _snapshot(
         ),
         supports_caught_filter=True,
     )
+
+
+def test_number_input_values_are_updates_but_added_fields_change_structure() -> None:
+    from dataclasses import replace
+
+    state = PanelDocumentState()
+    field = PanelNumberInput("Simulations", 100, key="simulations")
+    section = PanelSection("Arena", (), key="arena", role="urgent", inputs=(field,))
+    assert state.set_snapshot(OverlaySnapshot("Game", "Area", (section,))) is PanelDocumentUpdate.STRUCTURE
+    changed = replace(section, inputs=(replace(field, value=1000),))
+    assert state.set_snapshot(OverlaySnapshot("Game", "Area", (changed,))) is PanelDocumentUpdate.VALUES
+    removed = replace(section, inputs=())
+    assert state.set_snapshot(OverlaySnapshot("Game", "Area", (removed,))) is PanelDocumentUpdate.STRUCTURE
 
 
 def test_value_snapshot_preserves_expansion_and_action_filter_by_stable_key() -> None:

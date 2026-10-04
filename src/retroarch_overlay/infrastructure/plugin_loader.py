@@ -30,6 +30,7 @@ class RepositoryAdapter:
             ),
         )
         self._adapter: GameAdapter | None = None
+        self._pending_content_key: tuple[str, str, str] | None = None
 
     def supports(
         self, status: RetroArchStatus, content_hash: str | None = None
@@ -55,6 +56,7 @@ class RepositoryAdapter:
             capture(memory)
 
     def activate(self, content_key: tuple[str, str, str]) -> None:
+        self._pending_content_key = content_key
         if self._adapter is None:
             return
         activate = getattr(self._adapter, "activate", None)
@@ -62,6 +64,7 @@ class RepositoryAdapter:
             activate(content_key)
 
     def deactivate(self) -> None:
+        self._pending_content_key = None
         if self._adapter is None:
             return
         deactivate = getattr(self._adapter, "deactivate", None)
@@ -87,6 +90,10 @@ class RepositoryAdapter:
             if not callable(getattr(adapter, "snapshot", None)):
                 raise TypeError("created adapter must provide snapshot")
             self._adapter = adapter
+            if self._pending_content_key is not None:
+                activate = getattr(adapter, "activate", None)
+                if callable(activate):
+                    activate(self._pending_content_key)
             return adapter
         except Exception as error:
             raise GameUnavailableError(f"{manifest.display_name}: {error}") from error

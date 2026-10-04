@@ -31,9 +31,9 @@ def project_map_point(
 
 def map_source_point(position: MapPosition, layer: MapLayer) -> tuple[int, int]:
     return (
-        ((position.x + layer.offset_x) % layer.wrap_width) * layer.tile_width
+        _source_coordinate(position.x, layer.offset_x, layer.wrap_width, layer.wraps) * layer.tile_width
         + layer.anchor_x,
-        ((position.y + layer.offset_y) % layer.wrap_height) * layer.tile_height
+        _source_coordinate(position.y, layer.offset_y, layer.wrap_height, layer.wraps) * layer.tile_height
         + layer.anchor_y,
     )
 
@@ -48,9 +48,9 @@ def clamp_opacity(value: float) -> float:
 
 def waypoint_source_point(waypoint: MapWaypoint, layer: MapLayer) -> tuple[int, int]:
     return (
-        ((waypoint.x + layer.offset_x) % layer.wrap_width) * layer.tile_width
+        _source_coordinate(waypoint.x, layer.offset_x, layer.wrap_width, layer.wraps) * layer.tile_width
         + layer.anchor_x,
-        ((waypoint.y + layer.offset_y) % layer.wrap_height) * layer.tile_height
+        _source_coordinate(waypoint.y, layer.offset_y, layer.wrap_height, layer.wraps) * layer.tile_height
         + layer.anchor_y,
     )
 
@@ -153,3 +153,8 @@ def map_layer_for_position(
         ),
         None,
     )
+
+
+def _source_coordinate(value: int, offset: int, span: int, wraps: bool) -> int:
+    coordinate = value + offset
+    return coordinate % max(1, span) if wraps else coordinate

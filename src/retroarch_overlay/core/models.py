@@ -21,6 +21,15 @@ class PanelChip:
 
 
 @dataclass(frozen=True, slots=True)
+class PanelMeter:
+    label: str
+    value: int
+    maximum: int
+    color: str = ""
+    infinite: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class PanelRow:
     text: str
     caught: bool | None = None
@@ -31,6 +40,15 @@ class PanelRow:
     progress_color: str = ""  # "" picks a color from the progress value
     icon: str = ""  # absolute path to a small image rendered before the text
     chips: tuple[PanelChip, ...] = ()
+    meters: tuple[PanelMeter, ...] = ()
+    detail: str = ""  # secondary lines rendered muted under the text
+
+
+@dataclass(frozen=True, slots=True)
+class PanelColumn:
+    key: str
+    title: str
+    rows: tuple[PanelRow, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +58,22 @@ class PanelAction:
     rows: tuple[PanelRow, ...]
     compact: bool = False
     key: str = ""
+    map_layer_key: str = ""
+    command: Callable[[], None] | None = None
+    # Scrolls the section's markdown document to this heading anchor.
+    document_anchor: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class PanelNumberInput:
+    label: str
+    value: int
+    minimum: int = 0
+    maximum: int = 2_147_483_647
+    step: int = 1
+    key: str = ""
+    enabled: bool = True
+    command: Callable[[int], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +87,10 @@ class PanelSection:
     role: str = "context"
     compact_rows: tuple[PanelRow, ...] = ()
     key: str = ""
+    columns: tuple[PanelColumn, ...] = ()
+    markdown: str = ""
+    collapsible: bool = True
+    inputs: tuple[PanelNumberInput, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,7 +154,7 @@ class MapWaypoint:
     title: str
     detail: str = ""
     kind: str = "point"
-    completed: bool = False
+    completed: bool | None = False
     marker: str = ""
 
 
@@ -157,6 +195,7 @@ class MapLayer:
     # True only for genuinely toroidal maps, where walking off one edge brings
     # you out of the other. Everything else clamps at its borders.
     wraps: bool = False
+    image_variants: tuple[MapLayer, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QStyleOptionViewItem
 from reference_documents import reference_rows
 from retroarch_overlay.core.models import PanelChip, PanelRow
 from retroarch_overlay.presentation.qt import PanelRowListView, QtIconCache
+from retroarch_overlay.presentation.theme import THEME_PALETTES
 
 
 def _image_colors(view: PanelRowListView) -> set[str]:
@@ -130,3 +131,33 @@ def test_invalid_plugin_colors_fall_back_without_breaking_paint(qtbot) -> None:
     view.show()
 
     assert not view.viewport().grab().isNull()
+
+
+def test_detail_block_adds_height_and_paints_muted_under_the_title(qtbot) -> None:
+    plain = PanelRow("Slime", emphasis="heading", chips=(PanelChip("1 XP"),))
+    carded = PanelRow(
+        "Slime",
+        emphasis="heading",
+        chips=(PanelChip("1 XP"),),
+        detail="HP 8 · ATK 9 · DEF 4\nWeak: Blaze, Icebolt",
+    )
+    view = PanelRowListView((plain, carded))
+    view.set_theme("light")
+    view.resize(260, 240)
+    qtbot.addWidget(view)
+    view.show()
+    option = QStyleOptionViewItem()
+    option.widget = view
+    option.font = view.font()
+    option.rect.setWidth(240)
+
+    plain_size = view.row_delegate.sizeHint(option, view.row_model.index(0))
+    carded_size = view.row_delegate.sizeHint(option, view.row_model.index(1))
+    line = view.fontMetrics().height()
+
+    assert carded_size.height() >= plain_size.height() + 2 * line
+    assert view.row_model.index(1).data(Qt.ItemDataRole.AccessibleTextRole).startswith(
+        "Slime; HP 8 · ATK 9 · DEF 4, Weak: Blaze, Icebolt"
+    )
+    colors = _image_colors(view)
+    assert QColor(THEME_PALETTES["light"]["muted"]).name() in colors

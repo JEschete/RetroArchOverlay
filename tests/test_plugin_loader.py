@@ -56,7 +56,8 @@ hashes = ["accepted"]
     )
     (repository / "game" / "adapter.py").write_text(
         "class Adapter:\n"
-        "    def __init__(self, root): self.root = root\n"
+        "    def __init__(self, root): self.root = root; self.activations = []\n"
+        "    def activate(self, content_key): self.activations.append(content_key)\n"
         "    def snapshot(self, memory): return ('snapshot', self.root)\n",
         encoding="utf-8",
     )
@@ -64,6 +65,19 @@ hashes = ["accepted"]
 
 
 class RepositoryAdapterTests(unittest.TestCase):
+    def test_lazy_load_delivers_the_initial_content_identity_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository_root = write_repository(root)
+            repository = discover_plugin_repositories((root,)).repositories[0]
+            adapter = RepositoryAdapter(repository, GameContext(repository_root=repository_root))
+            key = ("core", "game", "12345678")
+            adapter.activate(key)
+            loaded = adapter._load_adapter()
+            self.assertEqual(loaded.activations, [key])
+            self.assertIs(adapter._load_adapter(), loaded)
+            self.assertEqual(loaded.activations, [key])
+
     def test_matches_manifest_without_importing_plugin(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

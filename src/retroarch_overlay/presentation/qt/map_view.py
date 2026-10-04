@@ -53,16 +53,29 @@ MARKER_STYLES = {
     "building": ("#7c5cbf", "B", "square"),
     "person": ("#6b7280", "", "circle"),
     "chest": ("#a65f1f", "C", "chest"),
+    "chest-unknown": ("#758181", "?", "chest"),
     "pot": ("#8a6f47", "O", "circle"),
     "drawer": ("#9c6b30", "D", "square"),
     "search": ("#d38a17", "?", "diamond"),
+    "search-conditional": ("#758181", "?", "diamond"),
     "exit": ("#3d6da8", "E", "diamond"),
     "stairs-up": ("#16817a", "^", "triangle"),
     "stairs-down": ("#276749", "v", "triangle-down"),
     "travel-door": ("#7c5cbf", "T", "diamond"),
+    "boat": ("#16817a", "", "boat"),
+    "balloon": ("#b04454", "", "balloon"),
     "healing": ("#2f855a", "H", "circle"),
     "thief-door": ("#8b5e34", "L", "square"),
     "magic-door": ("#4968a6", "M", "square"),
+    "final-door": ("#8b3d61", "F", "square"),
+    "door-ready": ("#198754", "L", "square"),
+    "door-unknown": ("#758181", "?", "square"),
+    "hazard": ("#b33939", "!", "triangle"),
+    "hazard-protected": ("#198754", "+", "diamond"),
+    "forced-up": ("#99691f", "^", "triangle"),
+    "forced-right": ("#99691f", ">", "diamond"),
+    "forced-down": ("#99691f", "v", "triangle-down"),
+    "forced-left": ("#99691f", "<", "diamond"),
     "transition": ("#5b6f8f", "R", "diamond"),
     "npc": ("#6b7280", "N", "circle"),
     "encounter": ("#b83232", "!", "triangle"),
@@ -136,6 +149,9 @@ class QtMapImageCache:
     def clear(self) -> None:
         self._entries.clear()
 
+    def invalidate(self, key: str) -> None:
+        self._entries.pop(key, None)
+
 
 class QtMapView(QGraphicsView):
     ZOOM_LEVELS = (1, 2, 4, 8, 16)
@@ -171,7 +187,10 @@ class QtMapView(QGraphicsView):
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self._layer_key = document.layers[0].key
+        self._image_view = "Cutaway"
+        self._navigation_key: str | None = None
         self._position: MapPosition | None = None
+        self._player_location: tuple[str, int, bool] | None = None
         self._indoor_map_id: int | None = None
         self._overlays: dict[str, tuple[MapWaypoint, ...]] = {}
         self._overlay_signature: tuple[MapOverlay, ...] = ()
@@ -218,6 +237,19 @@ class QtMapView(QGraphicsView):
     @property
     def current_layer(self) -> MapLayer:
         return self.layers[self._layer_key]
+
+    @property
+    def image_view(self) -> str:
+        return self._image_view if any(variant.title == self._image_view for variant in self.current_layer.image_variants) else "Cutaway"
+
+    def set_image_view(self, title: str) -> None:
+        allowed = {"Cutaway", *(variant.title for variant in self.current_layer.image_variants)}
+        if title not in allowed or title == self._image_view:
+            return
+        self._image_view = title
+        center = self.mapToScene(self.viewport().rect().center())
+        self._rebuild_scene()
+        self.centerOn(center)
 
     @property
     def position(self) -> MapPosition | None:
@@ -372,6 +404,42 @@ class QtMapView(QGraphicsView):
             self._path_snapshot = ()
         return True
 
+    def browse_layer(self, key: str) -> None:
+        if key not in self.layers:
+            raise KeyError(key)
+        self._navigation_key = key
+        self._position = None
+        self._indoor_map_id = None
+        self.set_layer(key, render=False)
+        self._rebuild_scene()
+
+    def follow_player(self) -> None:
+        self._navigation_key = None
+        self._position = None
+
+    def update_document(self, document: MapDocument, *, render: bool = True) -> None:
+        center = self.mapToScene(self.viewport().rect().center())
+        previous = self.layers[self._layer_key]
+        previous_image = next((variant for variant in previous.image_variants if variant.title == self._image_view), previous)
+        for layer in document.layers:
+            if self.layers.get(layer.key) != layer:
+                self._image_cache.invalidate(layer.key)
+                for variant in layer.image_variants:
+                    self._image_cache.invalidate(variant.key)
+        self.document = document
+        self.layers = {layer.key: layer for layer in document.layers}
+        current = self.layers[self._layer_key]
+        current_image = next((variant for variant in current.image_variants if variant.title == self._image_view), current)
+        if (current_image.image_path != previous_image.image_path
+            or current_image.image_loader != previous_image.image_loader
+                or current.waypoints != previous.waypoints or current.regions != previous.regions
+                or current.wraps != previous.wraps):
+            self._image_cache.invalidate(current_image.key)
+            self._pixmap = None
+            if render:
+                self._rebuild_scene()
+                self.centerOn(center)
+
     def update_map(
         self,
         position: MapPosition,
@@ -380,6 +448,10 @@ class QtMapView(QGraphicsView):
         previous = self._position
         previous_layer_key = self._layer_key
         matching = map_layer_for_position(self.document, position)
+        location = (position.area, -1 if position.is_world else position.map_id, position.is_world)
+        if self._player_location is not None and location != self._player_location:
+            self._navigation_key = None
+        self._player_location = location
         self._position = position if matching is not None else tracked_map_position(previous, position)
         self._indoor_map_id = None if position.is_world or matching is not None else position.map_id
         if matching is not None and (
@@ -388,6 +460,10 @@ class QtMapView(QGraphicsView):
             or previous.map_id != position.map_id
         ):
             self._layer_key = matching.key
+        if self._navigation_key is not None:
+            self._layer_key = self._navigation_key
+            self._position = position if matching is not None and matching.key == self._navigation_key else None
+            self._indoor_map_id = None
         overlay_map: dict[str, tuple[MapWaypoint, ...]] = {}
         for overlay in overlays:
             overlay_map[overlay.layer_key] = (
@@ -471,7 +547,8 @@ class QtMapView(QGraphicsView):
 
     def _rebuild_scene(self) -> None:
         layer = self.layers[self._layer_key]
-        self._pixmap = self._image_cache.load(layer)
+        image_layer = next((variant for variant in layer.image_variants if variant.title == self._image_view), layer)
+        self._pixmap = self._image_cache.load(image_layer)
         self._map_scene.clear()
         self._image_items = []
         self._static_items = []
@@ -637,7 +714,27 @@ class QtMapView(QGraphicsView):
                 marker = waypoint.marker or "person"
                 marker_color, symbol, shape = _marker_style(marker)
                 fill = QColor("#767b77" if waypoint.completed else marker_color)
-                if shape == "diamond":
+                if shape in {"boat", "balloon"}:
+                    path = QPainterPath()
+                    if shape == "boat":
+                        path.moveTo(-6, 0)
+                        path.lineTo(6, 0)
+                        path.lineTo(3, 4)
+                        path.lineTo(-3, 4)
+                        path.closeSubpath()
+                        path.moveTo(-1, -6)
+                        path.lineTo(4, -1)
+                        path.lineTo(-1, -1)
+                        path.closeSubpath()
+                    else:
+                        path.addEllipse(-4, -6, 8, 8)
+                        path.moveTo(-2, 2)
+                        path.lineTo(-1, 4)
+                        path.moveTo(2, 2)
+                        path.lineTo(1, 4)
+                        path.addRect(-1.5, 4, 3, 2)
+                    item = self._map_scene.addPath(path, QPen(QColor("#ffffff"), 1), fill)
+                elif shape == "diamond":
                     item = self._map_scene.addPolygon(
                         QPolygonF(
                             (

@@ -139,6 +139,8 @@ class PanelDocumentState:
         )
         if view is None:
             return PanelDocumentUpdate.UNCHANGED
+        if not view.section.collapsible:
+            return PanelDocumentUpdate.UNCHANGED
         self._open_sections[identity] = not view.open
         return self._refresh()
 
@@ -202,7 +204,7 @@ class PanelDocumentState:
                 continue
             section = filtered[0]
             expanded = identity in self._expanded_sections
-            is_open = self._open_sections.get(identity, _opens_by_default(section))
+            is_open = not section.collapsible or self._open_sections.get(identity, _opens_by_default(section))
             if is_open:
                 rows, hidden_count = preview_section_rows(section, expanded)
             else:
@@ -285,6 +287,10 @@ def _document_structure(
             section.open,
             section.expanded,
             panel_rows_structure(section.rows),
+            tuple((column.key, panel_rows_structure(column.rows)) for column in section.section.columns),
+            bool(section.section.markdown),
+            section.section.collapsible,
+            tuple(field.key or f"input-{index}" for index, field in enumerate(section.section.inputs)),
             section.hidden_count > 0,
             tuple(
                 (

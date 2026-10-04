@@ -9,7 +9,10 @@ def filter_detail_rows(
     needle = needle.strip().casefold()
     if not needle:
         return rows
-    return tuple(row for row in rows if needle in row.text.casefold())
+    return tuple(
+        row for row in rows
+        if needle in row.text.casefold() or needle in row.detail.casefold()
+    )
 
 
 def filter_caught_sections(

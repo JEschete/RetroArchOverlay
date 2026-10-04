@@ -77,6 +77,7 @@ class PanelRowDelegate(QStyledItemDelegate):
     VERTICAL_MARGIN = 4
     INDICATOR_WIDTH = 16
     PROGRESS_HEIGHT = 4
+    DETAIL_GAP = 2
 
     def __init__(
         self,
@@ -137,6 +138,13 @@ class PanelRowDelegate(QStyledItemDelegate):
         progress = index.data(PanelRowRole.PROGRESS)
         if progress is not None:
             content.setBottom(content.bottom() - self.PROGRESS_HEIGHT - 3)
+        meters = tuple(index.data(PanelRowRole.METERS) or ())
+        meter_height = max(20, QFontMetrics(option.font).height() + 4)
+        content.setBottom(content.bottom() - len(meters) * (meter_height + 3))
+        detail = str(index.data(PanelRowRole.DETAIL) or "")
+        block = QRect(content)
+        if detail:
+            content.setBottom(content.bottom() - self._detail_height(option, index, detail))
 
         caught = index.data(PanelRowRole.CAUGHT)
         if caught is not None:
@@ -223,6 +231,44 @@ class PanelRowDelegate(QStyledItemDelegate):
             | Qt.TextFlag.TextWordWrap,
             text,
         )
+        if detail:
+            painter.setFont(QFont(option.font))
+            painter.setPen(QColor(text_color if selected else self._colors["muted"]))
+            painter.drawText(
+                QRect(content.left(), content.bottom() + 1 + self.DETAIL_GAP,
+                      max(0, block.right() - content.left() + 1),
+                      max(0, block.bottom() - content.bottom() - self.DETAIL_GAP)),
+                Qt.AlignmentFlag.AlignLeft
+                | Qt.AlignmentFlag.AlignTop
+                | Qt.TextFlag.TextWordWrap,
+                detail,
+            )
+            content = block
+
+        meter_top = content.bottom() + 4
+        for meter in meters:
+            track = QRect(
+                option.rect.left() + self.HORIZONTAL_MARGIN,
+                meter_top,
+                max(0, option.rect.width() - self.HORIZONTAL_MARGIN * 2),
+                meter_height,
+            )
+            fraction = 1.0 if meter.infinite else max(0.0, min(1.0, meter.value / meter.maximum)) if meter.maximum > 0 else 0.0
+            painter.fillRect(track, QColor(self._colors["track"]))
+            fill = QRect(track)
+            fill.setWidth(round(track.width() * fraction))
+            color = progress_bar_color(fraction, self._colors, meter.color)
+            painter.fillRect(fill, QColor(_normalized_color(color, self._colors["accent"])))
+            meter_font = QFont(option.font)
+            painter.setFont(meter_font)
+            label = f"{meter.label} Unlimited" if meter.infinite else f"{meter.label} {meter.value}/{meter.maximum}"
+            painter.setPen(QColor(self._colors["foreground"]))
+            painter.drawText(track.adjusted(3, 0, -3, 0), Qt.AlignmentFlag.AlignCenter, label)
+            painter.setClipRect(fill)
+            painter.setPen(QColor(accessible_text_color(color, self._colors["foreground"])))
+            painter.drawText(track.adjusted(3, 0, -3, 0), Qt.AlignmentFlag.AlignCenter, label)
+            painter.setClipping(False)
+            meter_top += meter_height + 3
 
         if progress is not None:
             fraction = max(0.0, min(1.0, float(progress)))
@@ -246,6 +292,22 @@ class PanelRowDelegate(QStyledItemDelegate):
             )
         painter.restore()
 
+    def _detail_height(
+        self,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+        detail: str,
+    ) -> int:
+        # The detail block spans the full row under the title line, so chips
+        # never narrow it.
+        width = _detail_width(option, index, self.HORIZONTAL_MARGIN, self.INDICATOR_WIDTH, self.ICON_SIZE)
+        bounds = QFontMetrics(option.font).boundingRect(
+            QRect(0, 0, width, 10_000),
+            Qt.TextFlag.TextWordWrap,
+            detail,
+        )
+        return bounds.height() + self.DETAIL_GAP
+
     def sizeHint(
         self,
         option: QStyleOptionViewItem,
@@ -264,6 +326,8 @@ class PanelRowDelegate(QStyledItemDelegate):
             width -= self.INDICATOR_WIDTH + 2
         if index.data(PanelRowRole.ICON_PATH):
             width -= self.ICON_SIZE + 5
+        detail = str(index.data(PanelRowRole.DETAIL) or "")
+        detail_height = self._detail_height(option, index, detail) if detail else 0
         chips = tuple(index.data(PanelRowRole.CHIPS) or ())
         chip_font = QFont(font)
         chip_font.setPointSizeF(max(7.0, chip_font.pointSizeF() - 2.0))
@@ -275,9 +339,23 @@ class PanelRowDelegate(QStyledItemDelegate):
             text,
         )
         height = max(metrics.height(), text_rect.height(), self.ICON_SIZE if index.data(PanelRowRole.ICON_PATH) else 0)
+        height += detail_height
         if index.data(PanelRowRole.PROGRESS) is not None:
             height += self.PROGRESS_HEIGHT + 3
+        height += len(tuple(index.data(PanelRowRole.METERS) or ())) * (max(20, metrics.height() + 4) + 3)
         return QSize(max(120, option.rect.width()), height + self.VERTICAL_MARGIN * 2)
+
+
+def _detail_width(option: QStyleOptionViewItem, index: QModelIndex, margin: int, indicator: int, icon: int) -> int:
+    width = option.rect.width()
+    if width <= 0 and option.widget is not None:
+        width = option.widget.width()
+    width = max(120, width) - margin * 2
+    if index.data(PanelRowRole.CAUGHT) is not None:
+        width -= indicator + 2
+    if index.data(PanelRowRole.ICON_PATH):
+        width -= icon + 5
+    return max(40, width)
 
 
 def _is_heading(text: str, emphasis: str) -> bool:

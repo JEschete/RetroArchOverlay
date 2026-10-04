@@ -572,3 +572,41 @@ def test_changed_map_document_retires_old_windows_and_diagnostic_clears_tools(
     assert window.map_button.isHidden()
     assert window.minimap_button.isHidden()
     window.close()
+
+
+def test_open_atlas_survives_missing_position_and_retires_on_disconnect(
+    qtbot,
+    tmp_path: Path,
+) -> None:
+    window = QtOverlayWindow(StubController())
+    qtbot.addWidget(window)
+    window.show()
+    window.render_event(_map_snapshot(tmp_path))
+    window.map_button.click()
+    opened = window._map_window
+    assert opened is not None and opened.isVisible()
+
+    # An area transition reports a snapshot without a position.
+    window.render_event(replace(_map_snapshot(tmp_path), map_position=None))
+
+    assert window._map_window is opened and opened.isVisible()
+    assert window.map_button.isHidden()
+    assert not window._map_retire_timer.isActive()
+    assert window._map_document is not None
+
+    window.render_event(_map_snapshot(tmp_path, x=2))
+
+    assert window._map_window is opened and opened.isVisible()
+    assert not window._map_retire_timer.isActive()
+    assert opened.map_view.position == MapPosition("Outside", 0, 2, 1, True)
+
+    window.render_event(
+        OverlayDiagnostic(DiagnosticCode.CONNECTION_FAILED, "Not connected", "Offline")
+    )
+    assert window._map_window is opened and opened.isVisible()
+    assert window._map_retire_timer.isActive()
+    window._map_retire_timer.timeout.emit()
+
+    assert window._map_window is None
+    assert opened.isHidden()
+    window.close()

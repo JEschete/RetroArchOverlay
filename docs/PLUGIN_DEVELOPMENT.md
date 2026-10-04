@@ -189,6 +189,17 @@ game/
 
 Memory decoding should not produce display strings. Presentation code should not read raw memory. Asset paths must resolve from `GameContext.repository_root`.
 
+### Numeric Panel Inputs
+
+Import `PanelNumberInput` from `retroarch_overlay.models` and supply instances in
+`PanelSection.inputs`. Each input has a label, integer value, minimum/maximum,
+step, stable key, enabled flag, and `command(value)` callback. Keep callbacks fast:
+update plugin state or queue background work rather than reading memory or running
+CPU-heavy tasks on the UI thread. Publish the current value in subsequent snapshots.
+The Qt host preserves focused edits across refreshes and contains callback errors
+through the same failure signal as command actions. Numeric inputs follow their
+section's open/closed visibility; they do not automatically expand a section.
+
 ## Test the Plugin
 
 From a plugin nested under the framework `plugins` directory:

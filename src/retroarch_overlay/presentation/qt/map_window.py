@@ -97,11 +97,15 @@ class QtMapWindow(QWidget):
         self.layer_combo = QComboBox(self.toolbar)
         self.layer_combo.setAccessibleName("Map layer")
         for layer in document.layers:
-            if layer.map_id is None:
-                self.layer_combo.addItem(layer.title, layer.key)
+            self.layer_combo.addItem(layer.title, layer.key)
         self.layer_combo.setVisible(self.layer_combo.count() > 0)
         self.layer_combo.currentIndexChanged.connect(self._layer_changed)
         toolbar_layout.addWidget(self.layer_combo, 1)
+        self.view_combo = QComboBox(self.toolbar)
+        self.view_combo.setAccessibleName("Map image view")
+        self.view_combo.currentTextChanged.connect(self._image_view_changed)
+        self.view_combo.setVisible(False)
+        toolbar_layout.addWidget(self.view_combo)
         self.zoom_out = QPushButton("−", self.toolbar)
         self.zoom_out.setAccessibleName("Zoom out")
         self.zoom_out.clicked.connect(lambda: self._change_zoom(-1))
@@ -216,6 +220,17 @@ class QtMapWindow(QWidget):
         if self.isVisible():
             self._apply_pending_map()
 
+    def update_document(self, document: MapDocument) -> bool:
+        if (
+            document.title != self.document.title
+            or tuple(layer.key for layer in document.layers) != tuple(layer.key for layer in self.document.layers)
+            or document.overlay_kinds != self.document.overlay_kinds
+        ):
+            return False
+        self.document = document
+        self.map_view.update_document(document, render=self.isVisible())
+        return True
+
     def show_map(self) -> None:
         self.show()
         self.raise_()
@@ -293,10 +308,27 @@ class QtMapWindow(QWidget):
         note = " · indoors · last outside" if self.map_view.indoor_map_id is not None else ""
         self.heading.setText(
             f"{layer.title} · ({self._pending_position.x},{self._pending_position.y}){note}"
+            if self.map_view.position is not None else layer.title
         )
         self.credit_button.setText(layer.credit)
         self.credit_button.setVisible(bool(layer.credit) and not self.compact)
         self._sync_layer_combo(layer.key)
+        self._sync_image_views()
+
+    def _sync_image_views(self) -> None:
+        titles = ("Cutaway", *(variant.title for variant in self.map_view.current_layer.image_variants))
+        with QSignalBlocker(self.view_combo):
+            self.view_combo.clear()
+            self.view_combo.addItems(titles)
+            self.view_combo.setCurrentText(self.map_view.image_view if self.map_view.image_view in titles else "Cutaway")
+        self.view_combo.setVisible(len(titles) > 1 and not self.compact)
+
+    def _image_view_changed(self, title: str) -> None:
+        try:
+            self.map_view.set_image_view(title)
+        except (OSError, ValueError) as error:
+            self.heading.setText(f"Map unavailable · {error}")
+        self._view_changed()
 
     def _sync_layer_combo(self, key: str) -> None:
         index = self.layer_combo.findData(key)
@@ -307,7 +339,7 @@ class QtMapWindow(QWidget):
         key = self.layer_combo.itemData(index)
         if not isinstance(key, str):
             return
-        self.map_view.set_layer(key, render=self.isVisible())
+        self.map_view.browse_layer(key)
         if self.isVisible() and self._pending_position is not None:
             self.map_view.update_map(self._pending_position, self._pending_overlays)
         self._view_changed()
@@ -329,6 +361,8 @@ class QtMapWindow(QWidget):
         self.zoom_label.setText(f"{zoom}×")
 
     def map_view_recenter(self) -> None:
+        self.map_view.follow_player()
+        self._apply_pending_map()
         self.map_view.recenter()
 
     def _open_source(self) -> None:

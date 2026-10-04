@@ -75,6 +75,27 @@ def test_hidden_updates_remain_lazy_until_window_is_shown(qtbot, tmp_path: Path)
     window.shutdown()
 
 
+@pytest.mark.parametrize("compact", (False, True))
+def test_map_location_change_resumes_following_after_layer_selection(qtbot, tmp_path: Path, compact: bool) -> None:
+    owner = QWidget()
+    qtbot.addWidget(owner)
+    window = QtMapWindow(owner, _document(tmp_path), compact=compact)
+    qtbot.addWidget(window)
+    window.update_map(MapPosition("Outside", 0, 1, 1, True))
+    window.show_map()
+    window.layer_combo.setCurrentIndex(window.layer_combo.findData("underworld"))
+    window.update_map(MapPosition("Outside", 0, 2, 1, True))
+    assert window.map_view.layer_key == "underworld"
+
+    window.update_map(MapPosition("Below", 0, 3, 2, True))
+    window.update_map(MapPosition("Outside", 0, 1, 2, True))
+    assert window.map_view.layer_key == "world"
+    assert window.layer_combo.currentData() == "world"
+    assert "(1,2)" in window.heading.text()
+    assert window.map_view.player_scene_positions == ((16.0, 32.0),)
+    window.shutdown()
+
+
 def test_restores_existing_view_schema_and_legacy_geometry(qtbot, tmp_path: Path) -> None:
     settings = LocalPluginSettings(tmp_path / "local_settings.json")
     settings.save_map_view_state(
@@ -277,7 +298,7 @@ def test_map_controls_have_contextual_accessible_names_and_tab_order(
     window.shutdown()
 
 
-def test_local_only_document_hides_empty_layer_selector(qtbot, tmp_path: Path) -> None:
+def test_local_only_document_exposes_browsable_floor_selector(qtbot, tmp_path: Path) -> None:
     document = _document(tmp_path)
     local_layers = tuple(
         replace(layer, map_id=index)
@@ -287,7 +308,9 @@ def test_local_only_document_hides_empty_layer_selector(qtbot, tmp_path: Path) -
     qtbot.addWidget(owner)
     window = QtMapWindow(owner, replace(document, layers=local_layers))
 
-    assert window.layer_combo.isHidden()
+    assert not window.layer_combo.isHidden()
+    assert window.layer_combo.count() == len(local_layers)
+    assert tuple(window.layer_combo.itemData(index) for index in range(window.layer_combo.count())) == tuple(layer.key for layer in local_layers)
     window.shutdown()
 
 

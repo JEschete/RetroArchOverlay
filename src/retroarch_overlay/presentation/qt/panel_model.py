@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from enum import Enum, IntEnum
 
-from PySide6.QtCore import QAbstractListModel, QByteArray, QModelIndex, Qt
+from PySide6.QtCore import QAbstractListModel, QByteArray, QModelIndex, QObject, QPersistentModelIndex, Qt
 
 from ...core.models import PanelRow
 
@@ -15,6 +15,8 @@ class PanelRowRole(IntEnum):
     PROGRESS_COLOR = int(Qt.ItemDataRole.UserRole) + 4
     ICON_PATH = int(Qt.ItemDataRole.UserRole) + 5
     CHIPS = int(Qt.ItemDataRole.UserRole) + 6
+    METERS = int(Qt.ItemDataRole.UserRole) + 7
+    DETAIL = int(Qt.ItemDataRole.UserRole) + 8
 
 
 class PanelModelUpdate(str, Enum):
@@ -30,6 +32,8 @@ _ROLE_NAMES = {
     PanelRowRole.PROGRESS_COLOR: QByteArray(b"progressColor"),
     PanelRowRole.ICON_PATH: QByteArray(b"iconPath"),
     PanelRowRole.CHIPS: QByteArray(b"chips"),
+    PanelRowRole.METERS: QByteArray(b"meters"),
+    PanelRowRole.DETAIL: QByteArray(b"detail"),
 }
 
 _VALUE_ROLES = [
@@ -45,7 +49,7 @@ class PanelRowModel(QAbstractListModel):
     def __init__(
         self,
         rows: Iterable[PanelRow] = (),
-        parent: object | None = None,
+        parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._rows = tuple(rows)
@@ -54,10 +58,10 @@ class PanelRowModel(QAbstractListModel):
     def rows(self) -> tuple[PanelRow, ...]:
         return self._rows
 
-    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+    def rowCount(self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._rows)
 
-    def data(self, index: QModelIndex, role: int = int(Qt.ItemDataRole.DisplayRole)):
+    def data(self, index: QModelIndex | QPersistentModelIndex, role: int = int(Qt.ItemDataRole.DisplayRole)):
         if not index.isValid() or not 0 <= index.row() < len(self._rows):
             return None
         row = self._rows[index.row()]
@@ -81,6 +85,10 @@ class PanelRowModel(QAbstractListModel):
             return row.icon
         if role == PanelRowRole.CHIPS:
             return row.chips
+        if role == PanelRowRole.METERS:
+            return row.meters
+        if role == PanelRowRole.DETAIL:
+            return row.detail
         return None
 
     def roleNames(self) -> dict[int, QByteArray]:
@@ -88,7 +96,7 @@ class PanelRowModel(QAbstractListModel):
         names.update({int(role): name for role, name in _ROLE_NAMES.items()})
         return names
 
-    def flags(self, index: QModelIndex) -> Qt.ItemFlag:
+    def flags(self, index: QModelIndex | QPersistentModelIndex) -> Qt.ItemFlag:
         if not index.isValid():
             return Qt.ItemFlag.NoItemFlags
         return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
@@ -118,7 +126,8 @@ def panel_rows_structure(
     rows: tuple[PanelRow, ...],
 ) -> tuple[tuple[object, ...], ...]:
     return tuple(
-        (bool(row.icon), len(row.chips), row.progress is not None) for row in rows
+        (bool(row.icon), len(row.chips), row.progress is not None, len(row.meters), bool(row.detail))
+        for row in rows
     )
 
 
@@ -138,6 +147,8 @@ def _contiguous_ranges(values: list[int]) -> tuple[tuple[int, int], ...]:
 
 def _accessible_text(row: PanelRow) -> str:
     parts = [row.text]
+    if row.detail:
+        parts.append(", ".join(row.detail.splitlines()))
     if row.caught is True:
         parts.append("complete")
     elif row.caught is False:
@@ -147,4 +158,6 @@ def _accessible_text(row: PanelRow) -> str:
         parts.append(f"progress {progress} percent")
     if row.chips:
         parts.append("tags " + ", ".join(chip.text for chip in row.chips))
+    parts.extend(f"{meter.label} unlimited" if meter.infinite else f"{meter.label} {meter.value} of {meter.maximum}"
+                 for meter in row.meters)
     return "; ".join(parts)

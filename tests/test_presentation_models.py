@@ -1,5 +1,5 @@
 from retroarch_overlay.core.models import PanelAction, PanelRow, PanelSection
-from retroarch_overlay.core.presentation import compact_secondary_sections
+from retroarch_overlay.core.presentation import compact_secondary_sections, filter_detail_rows
 
 
 def test_legacy_panel_document_construction_keeps_empty_stable_keys() -> None:
@@ -57,3 +57,14 @@ def test_compact_secondary_sections_keep_semantics_without_actions() -> None:
     assert compact[1].rows == (PanelRow("Compact party"),)
     assert all(section.actions == () for section in compact)
     assert all(section.preview_limit is None for section in compact)
+
+
+def test_detail_filter_matches_row_text_and_detail() -> None:
+    rows = (
+        PanelRow("Slime", detail="Weak: Blaze"),
+        PanelRow("Drakee", detail="Weak: Icebolt"),
+    )
+
+    assert filter_detail_rows(rows, "slime") == rows[:1]
+    assert filter_detail_rows(rows, "icebolt") == rows[1:]
+    assert filter_detail_rows(rows, "weak") == rows
