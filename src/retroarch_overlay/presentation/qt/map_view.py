@@ -177,6 +177,7 @@ class QtMapView(QGraphicsView):
         self.document = document
         self.layers = {layer.key: layer for layer in document.layers}
         self._image_cache = image_cache or QtMapImageCache()
+        self._marker_image_cache = QtMapImageCache(maximum_entries=128)
         self._map_scene = QGraphicsScene(self)
         self.setScene(self._map_scene)
         self.setAccessibleName(document.title)
@@ -240,10 +241,11 @@ class QtMapView(QGraphicsView):
 
     @property
     def image_view(self) -> str:
-        return self._image_view if any(variant.title == self._image_view for variant in self.current_layer.image_variants) else "Cutaway"
+        layer = self.current_layer
+        return self._image_view if any(variant.title == self._image_view for variant in layer.image_variants) else layer.image_title
 
     def set_image_view(self, title: str) -> None:
-        allowed = {"Cutaway", *(variant.title for variant in self.current_layer.image_variants)}
+        allowed = {self.current_layer.image_title, *(variant.title for variant in self.current_layer.image_variants)}
         if title not in allowed or title == self._image_view:
             return
         self._image_view = title
@@ -662,12 +664,20 @@ class QtMapView(QGraphicsView):
         source_x, source_y = waypoint_source_point(waypoint, layer)
         color = QColor("#767b77" if waypoint.completed else "#bb3e2f")
         items: list[QGraphicsItem] = []
+        marker_image = (self._marker_image_cache.load(MapLayer(
+            str(waypoint.image_path), waypoint.title, layer.area, waypoint.image_path))
+            if waypoint.image_path is not None else None)
         for offset_x, offset_y in _tile_offsets(
             layer,
             self._pixmap.width(),
             self._pixmap.height(),
         ):
-            if waypoint.kind == "objective":
+            if marker_image is not None:
+                item = self._map_scene.addPixmap(marker_image)
+                item.setOffset(-marker_image.width() / 2, -marker_image.height() + layer.tile_height / 2)
+                item.setTransformationMode(Qt.TransformationMode.FastTransformation)
+                item.setData(1, "bitmap")
+            elif waypoint.kind == "objective":
                 ring = self._map_scene.addEllipse(
                     -11,
                     -11,
@@ -782,7 +792,7 @@ class QtMapView(QGraphicsView):
                     )
                 item.setData(1, shape)
                 item.setData(2, symbol)
-            item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
+            item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, marker_image is None)
             item.setPos(source_x + offset_x, source_y + offset_y)
             item.setToolTip(_tooltip(waypoint.title, waypoint.detail))
             item.setZValue(10)

@@ -108,6 +108,23 @@ def test_location_change_resumes_following_after_manual_browsing(qtbot, tmp_path
     assert view.layer_key == "world"
 
 
+def test_explicit_world_identity_tracks_town_world_and_town(qtbot, tmp_path: Path) -> None:
+    path = _image(tmp_path / "atlas.png")
+    layers = (
+        MapLayer("floor-1A-00", "Alcapa", "floor-1A-00", path, map_id=0x1A00),
+        MapLayer("world-0", "World Map", "world-0", path, map_id=0x10000, wraps=True),
+    )
+    view = QtMapView(MapDocument("Dragon Quest V", layers))
+    qtbot.addWidget(view)
+    view.update_map(MapPosition("floor-1A-00", 0x1A00, 2, 3))
+    assert view.layer_key == "floor-1A-00"
+    view.update_map(MapPosition("world-0", 0x10000, 4, 5, True))
+    assert view.layer_key == "world-0"
+    assert (64.0, 80.0) in view.player_scene_positions
+    view.update_map(MapPosition("floor-1A-00", 0x1A00, 6, 7))
+    assert view.layer_key == "floor-1A-00"
+
+
 def test_nonwrapping_marker_coordinates_are_not_folded_into_another_tile() -> None:
     layer = MapLayer("area", "Area", "Inside", Path("area.png"),
                      wrap_width=4, wrap_height=4, anchor_x=8, anchor_y=8)

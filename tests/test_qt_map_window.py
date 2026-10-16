@@ -96,6 +96,27 @@ def test_map_location_change_resumes_following_after_layer_selection(qtbot, tmp_
     window.shutdown()
 
 
+@pytest.mark.parametrize("compact", (False, True))
+def test_atlas_growth_preserves_open_window_and_tracks_added_world(qtbot, tmp_path: Path, compact: bool) -> None:
+    path = _image(tmp_path / "atlas.png")
+    town = MapLayer("town", "Town", "town", path, map_id=1)
+    world = MapLayer("world-0", "World Map", "world-0", path, map_id=0x10000, wraps=True)
+    owner = QWidget()
+    qtbot.addWidget(owner)
+    window = QtMapWindow(owner, MapDocument("Atlas", (town,)), compact=compact)
+    qtbot.addWidget(window)
+    window.update_map(MapPosition("town", 1, 1, 1))
+    window.show_map()
+    window.map_view.set_zoom(2)
+    assert window.update_document(MapDocument("Atlas", (town, world)))
+    assert window.isVisible() and window.map_view.zoom == 2
+    window.update_map(MapPosition("world-0", 0x10000, 2, 3, True))
+    assert window.map_view.layer_key == "world-0"
+    assert window.layer_combo.currentData() == "world-0"
+    assert window.map_view.player_scene_positions
+    window.shutdown()
+
+
 def test_restores_existing_view_schema_and_legacy_geometry(qtbot, tmp_path: Path) -> None:
     settings = LocalPluginSettings(tmp_path / "local_settings.json")
     settings.save_map_view_state(

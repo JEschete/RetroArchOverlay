@@ -221,14 +221,22 @@ class QtMapWindow(QWidget):
             self._apply_pending_map()
 
     def update_document(self, document: MapDocument) -> bool:
+        previous_keys = tuple(layer.key for layer in self.document.layers)
+        incoming_keys = tuple(layer.key for layer in document.layers)
         if (
             document.title != self.document.title
-            or tuple(layer.key for layer in document.layers) != tuple(layer.key for layer in self.document.layers)
+            or not set(previous_keys).issubset(incoming_keys)
             or document.overlay_kinds != self.document.overlay_kinds
         ):
             return False
         self.document = document
         self.map_view.update_document(document, render=self.isVisible())
+        if incoming_keys != previous_keys:
+            with QSignalBlocker(self.layer_combo):
+                self.layer_combo.clear()
+                for layer in document.layers:
+                    self.layer_combo.addItem(layer.title, layer.key)
+                self.layer_combo.setCurrentIndex(self.layer_combo.findData(self.map_view.layer_key))
         return True
 
     def show_map(self) -> None:
@@ -316,11 +324,12 @@ class QtMapWindow(QWidget):
         self._sync_image_views()
 
     def _sync_image_views(self) -> None:
-        titles = ("Cutaway", *(variant.title for variant in self.map_view.current_layer.image_variants))
+        primary = self.map_view.current_layer.image_title
+        titles = (primary, *(variant.title for variant in self.map_view.current_layer.image_variants))
         with QSignalBlocker(self.view_combo):
             self.view_combo.clear()
             self.view_combo.addItems(titles)
-            self.view_combo.setCurrentText(self.map_view.image_view if self.map_view.image_view in titles else "Cutaway")
+            self.view_combo.setCurrentText(self.map_view.image_view if self.map_view.image_view in titles else primary)
         self.view_combo.setVisible(len(titles) > 1 and not self.compact)
 
     def _image_view_changed(self, title: str) -> None:

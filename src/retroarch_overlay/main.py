@@ -119,6 +119,10 @@ def main() -> int:
         repository.manifest.plugin_id: local_settings.save_path(repository.manifest.plugin_id)
         for repository in discovery.repositories
     }
+    plugin_diagnostics = {
+        repository.manifest.plugin_id: local_settings.plugin_diagnostics(repository.manifest.plugin_id)
+        for repository in discovery.repositories
+    }
     plugin_adapters = [
         RepositoryAdapter(
             repository,
@@ -128,6 +132,7 @@ def main() -> int:
                     for key, value in (
                         ("rom_path", plugin_rom_paths[repository.manifest.plugin_id]),
                         ("save_path", plugin_save_paths[repository.manifest.plugin_id]),
+                        ("diagnostics", plugin_diagnostics[repository.manifest.plugin_id]),
                     )
                     if value is not None
                 },

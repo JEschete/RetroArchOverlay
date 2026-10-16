@@ -28,6 +28,7 @@ from retroarch_overlay.presentation.qt import PanelDocumentView
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = PROJECT_ROOT / "plugins"
 EXPECTED_SLUGS = {
+    "dragonquest5",
     "dragonwarrior3",
     "dragonwarrior4",
     "pokeemerald",
@@ -35,6 +36,9 @@ EXPECTED_SLUGS = {
     "vagrantstory",
 }
 STATUS_BY_SLUG = {
+    "dragonquest5": RetroArchStatus(
+        "PLAYING", "super_nes", "Dragon Quest V"
+    ),
     "dragonwarrior3": RetroArchStatus(
         "PLAYING", "mesen", "Dragon Warrior III"
     ),
@@ -61,12 +65,16 @@ def _discover_real_plugins():
 
 
 def _context(repository: DiscoveredPluginRepository, state_root: Path) -> GameContext:
+    settings = {
+        "dashboard": False,
+        "dashboard_launch": False,
+        "dump_path": state_root / "missing-retail-dump",
+    }
+    if repository.manifest.slug == "dragonquest5":
+        settings["rom_path"] = (repository.repository_root / "Resources/2148-DragonQuest5-English"
+                                / "Dragon Quest V - Tenkuu no Hanayome (Japan) (En) (v2.01F) (DeJap).sfc")
     return GameContext(
-        settings={
-            "dashboard": False,
-            "dashboard_launch": False,
-            "dump_path": state_root / "missing-retail-dump",
-        },
+        settings=settings,
         repository_root=repository.repository_root,
         state_directory=state_root / repository.manifest.plugin_id,
     )
@@ -82,14 +90,19 @@ def test_all_catalog_plugins_load_in_isolated_namespaces_and_state_roots(
             repository,
             _context(repository, tmp_path / "plugin-state"),
         )
+        if repository.manifest.slug == "dragonquest5" and not wrapper._context.settings["rom_path"].is_file():
+            with pytest.raises(GameUnavailableError, match="Missing, empty, or oversized input"):
+                wrapper._load_adapter()
+            continue
         adapter = wrapper._load_adapter()
         loaded.append((repository, wrapper, adapter))
 
     modules = [type(adapter).__module__.split(".", 1)[0] for _, _, adapter in loaded]
     state_roots = [wrapper._context.state_directory for _, wrapper, _ in loaded]
-    assert len(modules) == len(set(modules)) == 5
+    assert len(modules) == len(set(modules)) == len(loaded)
+    assert len(loaded) >= len(EXPECTED_SLUGS) - 1
     assert all(module.startswith("_retroarch_overlay_plugin_") for module in modules)
-    assert len(state_roots) == len(set(state_roots)) == 5
+    assert len(state_roots) == len(set(state_roots)) == len(loaded)
     assert all(
         path is not None and path.name == repository.manifest.plugin_id
         for repository, wrapper, _ in loaded

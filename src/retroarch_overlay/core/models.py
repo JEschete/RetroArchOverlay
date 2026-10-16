@@ -156,6 +156,7 @@ class MapWaypoint:
     kind: str = "point"
     completed: bool | None = False
     marker: str = ""
+    image_path: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +197,8 @@ class MapLayer:
     # you out of the other. Everything else clamps at its borders.
     wraps: bool = False
     image_variants: tuple[MapLayer, ...] = ()
+    # Name of this layer's own image in the view selector when variants exist.
+    image_title: str = "Cutaway"
 
 
 @dataclass(frozen=True, slots=True)

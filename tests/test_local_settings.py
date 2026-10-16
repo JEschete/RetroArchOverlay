@@ -126,6 +126,26 @@ class LocalPluginSettingsTests(unittest.TestCase):
             self.assertIsNone(settings.rom_path("org.example.game"))
             self.assertEqual(settings.save_path("org.example.game"), save.resolve())
 
+    def test_plugin_diagnostics_toggle_persists_without_changing_file_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rom = root / "game.sfc"
+            save = root / "game.srm"
+            rom.write_bytes(b"ROM")
+            save.write_bytes(b"SRAM")
+            settings = LocalPluginSettings(root / "local_settings.json")
+            settings.save_rom_path("org.example.game", rom)
+            settings.save_save_path("org.example.game", save)
+
+            settings.save_plugin_diagnostics("org.example.game", True)
+            reloaded = LocalPluginSettings(settings.path)
+            self.assertTrue(reloaded.plugin_diagnostics("org.example.game"))
+            self.assertEqual(reloaded.rom_path("org.example.game"), rom.resolve())
+            self.assertEqual(reloaded.save_path("org.example.game"), save.resolve())
+
+            reloaded.save_plugin_diagnostics("org.example.game", False)
+            self.assertFalse(LocalPluginSettings(settings.path).plugin_diagnostics("org.example.game"))
+
     def test_saves_layout_and_window_geometry(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             settings = LocalPluginSettings(Path(directory) / "local_settings.json")

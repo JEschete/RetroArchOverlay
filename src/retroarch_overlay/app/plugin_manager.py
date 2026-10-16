@@ -22,6 +22,8 @@ class PluginPathSettings(Protocol):
 
     def save_path(self, plugin_id: str) -> Path | None: ...
 
+    def plugin_diagnostics(self, plugin_id: str) -> bool: ...
+
 
 @dataclass(frozen=True, slots=True)
 class InstalledPluginView:
@@ -59,6 +61,7 @@ class PluginDetails:
     save_path: Path | None
     source: PluginSourceSpec | None
     raw_manifest: str
+    diagnostics_enabled: bool = False
 
     @property
     def required_files(self) -> tuple[str, ...]:
@@ -84,6 +87,7 @@ class PluginEditorValues:
     decomp_required: bool = False
     rom_path: str = ""
     save_path: str = ""
+    diagnostics_enabled: bool = False
 
     @classmethod
     def from_details(
@@ -110,6 +114,7 @@ class PluginEditorValues:
             decomp_required=source.required if source else False,
             rom_path=str(details.rom_path or ""),
             save_path=str(details.save_path or ""),
+            diagnostics_enabled=details.diagnostics_enabled,
         )
 
     @property
@@ -301,6 +306,7 @@ def plugin_details(
         settings.save_path(installed.plugin_id),
         source,
         raw_manifest,
+        settings.plugin_diagnostics(installed.plugin_id),
     )
 
 

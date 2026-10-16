@@ -138,13 +138,13 @@ def map_layer_for_position(
     document: MapDocument,
     position: MapPosition,
 ) -> MapLayer | None:
-    if not position.is_world:
-        matching_id = next(
-            (layer for layer in document.layers if layer.map_id == position.map_id),
-            None,
-        )
-        if matching_id is not None:
-            return matching_id
+    matching_id = next(
+        (layer for layer in document.layers if layer.map_id == position.map_id
+         and (not position.is_world or layer.area == position.area)),
+        None,
+    )
+    if matching_id is not None:
+        return matching_id
     return next(
         (
             layer

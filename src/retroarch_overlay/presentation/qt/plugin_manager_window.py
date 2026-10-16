@@ -242,6 +242,16 @@ class QtPluginManagerWindow(QMainWindow):
         self.browse_save_button.clicked.connect(self.browse_save)
         save_layout.addWidget(self.browse_save_button)
         editor_layout.addRow("Save", save_row)
+        self.rom_path.editingFinished.connect(self._save_selected_local_paths)
+        self.save_path.editingFinished.connect(self._save_selected_local_paths)
+        self.diagnostics_enabled = QCheckBox("Diagnostic logging (next overlay start)", self.editor)
+        self.diagnostics_enabled.setAccessibleName("Enable plugin diagnostic logging")
+        self.diagnostics_enabled.setToolTip(
+            "Writes DQ5 state changes, snapshot timing, and capture retries to "
+            "%LOCALAPPDATA%/RetroArchOverlay/logs/retroarch-overlay.log. Restart the overlay to apply."
+        )
+        self.diagnostics_enabled.toggled.connect(lambda _enabled: self._save_selected_local_paths())
+        editor_layout.addRow("Diagnostics", self.diagnostics_enabled)
         editor_actions = QWidget(self.editor)
         editor_actions_layout = QGridLayout(editor_actions)
         editor_actions_layout.setContentsMargins(0, 0, 0, 0)
@@ -401,6 +411,8 @@ class QtPluginManagerWindow(QMainWindow):
             self.status_label.setText(f"Unable to open repository: {error}")
 
     def launch_overlay(self) -> None:
+        if not self._save_selected_local_paths():
+            return
         try:
             process = launch_overlay(
                 self.plugin_root,
@@ -456,6 +468,7 @@ class QtPluginManagerWindow(QMainWindow):
         )
         if selected:
             self.rom_path.setText(selected)
+            self._save_selected_local_paths()
 
     def browse_save(self) -> None:
         selected, _filter = QFileDialog.getOpenFileName(
@@ -466,6 +479,21 @@ class QtPluginManagerWindow(QMainWindow):
         )
         if selected:
             self.save_path.setText(selected)
+            self._save_selected_local_paths()
+
+    def _save_selected_local_paths(self) -> bool:
+        selected = self.state.selected
+        if selected is None:
+            return True
+        values = self._editor_values()
+        try:
+            self.settings.save_rom_path(selected.manifest.plugin_id, values.optional_rom_path)
+            self.settings.save_save_path(selected.manifest.plugin_id, values.optional_save_path)
+            self.settings.save_plugin_diagnostics(selected.manifest.plugin_id, values.diagnostics_enabled)
+        except (OSError, ValueError) as error:
+            self.status_label.setText(f"Unable to save local ROM/save paths: {error}")
+            return False
+        return True
 
     def save_manifest(self) -> None:
         values = self._editor_values()
@@ -488,6 +516,10 @@ class QtPluginManagerWindow(QMainWindow):
                 self.settings.save_save_path(
                     config.resolved_plugin_id,
                     values.optional_save_path,
+                )
+                self.settings.save_plugin_diagnostics(
+                    config.resolved_plugin_id,
+                    values.diagnostics_enabled,
                 )
                 return created
 
@@ -519,6 +551,7 @@ class QtPluginManagerWindow(QMainWindow):
             )
             self.settings.save_rom_path(plugin_id, values.optional_rom_path)
             self.settings.save_save_path(plugin_id, values.optional_save_path)
+            self.settings.save_plugin_diagnostics(plugin_id, values.diagnostics_enabled)
             return repository
 
         self._start_task("Saving manifest", update, self._manifest_saved)
@@ -923,6 +956,7 @@ class QtPluginManagerWindow(QMainWindow):
             decomp_required=self.decomp_required.isChecked(),
             rom_path=self.rom_path.text(),
             save_path=self.save_path.text(),
+            diagnostics_enabled=self.diagnostics_enabled.isChecked(),
         )
 
     def _set_editor_values(self, values: PluginEditorValues) -> None:
@@ -934,6 +968,7 @@ class QtPluginManagerWindow(QMainWindow):
         self.decomp_required.setChecked(values.decomp_required)
         self.rom_path.setText(values.rom_path)
         self.save_path.setText(values.save_path)
+        self.diagnostics_enabled.setChecked(values.diagnostics_enabled)
         self.editor_fields["slug"].setReadOnly(self.state.selected is not None)
 
 

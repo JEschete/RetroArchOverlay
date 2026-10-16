@@ -1,5 +1,6 @@
 # Python bytecode and tool caches
 __pycache__/
+.tmp/
 *.py[cod]
 *$py.class
 .pytest_cache/

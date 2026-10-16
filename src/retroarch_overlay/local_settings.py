@@ -24,6 +24,30 @@ class LocalPluginSettings:
         value = self._plugins().get(plugin_id, {}).get("save_path")
         return Path(value) if isinstance(value, str) and value else None
 
+    def plugin_diagnostics(self, plugin_id: str) -> bool:
+        return self._plugins().get(plugin_id, {}).get("diagnostics") is True
+
+    def save_plugin_diagnostics(self, plugin_id: str, enabled: bool) -> None:
+        plugin_id = plugin_id.strip()
+        if not plugin_id:
+            raise ValueError("Plugin ID is required before saving diagnostic logging")
+        document = self._document()
+        plugins = document.setdefault("plugins", {})
+        if not isinstance(plugins, dict):
+            plugins = {}
+            document["plugins"] = plugins
+        settings = plugins.setdefault(plugin_id, {})
+        if not isinstance(settings, dict):
+            settings = {}
+            plugins[plugin_id] = settings
+        if enabled:
+            settings["diagnostics"] = True
+        else:
+            settings.pop("diagnostics", None)
+            if not settings:
+                plugins.pop(plugin_id, None)
+        self._write(document)
+
     def retroarch_path(self) -> Path | None:
         value = self._document().get("retroarch_path")
         return Path(value) if isinstance(value, str) and value else None

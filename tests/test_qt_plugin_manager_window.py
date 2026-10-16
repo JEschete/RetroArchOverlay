@@ -283,6 +283,10 @@ def test_delete_requires_inspection_and_explicit_confirmation(qtbot, tmp_path: P
 def test_open_and_launch_use_existing_services(qtbot, tmp_path: Path) -> None:
     repository = _write_plugin(tmp_path, "Alpha", "org.example.alpha", "alpha")
     settings = LocalPluginSettings(tmp_path / "settings.json")
+    rom = tmp_path / "game.sfc"
+    save = tmp_path / "game.srm"
+    rom.write_bytes(b"rom")
+    save.write_bytes(b"save")
     window = QtPluginManagerWindow(
         plugin_root=tmp_path,
         settings=settings,
@@ -290,6 +294,8 @@ def test_open_and_launch_use_existing_services(qtbot, tmp_path: Path) -> None:
     )
     qtbot.addWidget(window)
     window.installed_table.selectRow(0)
+    window.rom_path.setText(str(rom))
+    window.save_path.setText(str(save))
     process = Mock(pid=1234)
 
     with (
@@ -304,6 +310,8 @@ def test_open_and_launch_use_existing_services(qtbot, tmp_path: Path) -> None:
 
     startfile.assert_called_once_with(repository.resolve())
     launch.assert_called_once_with(tmp_path.resolve(), retroarch_config=None)
+    assert settings.rom_path("org.example.alpha") == rom.resolve()
+    assert settings.save_path("org.example.alpha") == save.resolve()
     assert window.status_label.text() == "Overlay started with process 1234"
 
 
@@ -520,6 +528,50 @@ def test_plugin_root_rom_and_save_browsers_update_fields(qtbot, tmp_path: Path) 
     assert window.plugin_root == replacement.resolve()
     assert window.rom_path.text() == str(rom)
     assert window.save_path.text() == str(save)
+
+
+def test_browsed_local_paths_persist_without_saving_manifest(qtbot, tmp_path: Path) -> None:
+    _write_plugin(tmp_path, "Alpha", "org.example.alpha", "alpha")
+    settings = LocalPluginSettings(tmp_path / "settings.json")
+    rom = tmp_path / "game.sfc"
+    save = tmp_path / "game.srm"
+    rom.write_bytes(b"rom")
+    save.write_bytes(b"save")
+    window = QtPluginManagerWindow(
+        plugin_root=tmp_path,
+        settings=settings,
+        auto_load_catalog=False,
+    )
+    qtbot.addWidget(window)
+    window.installed_table.selectRow(0)
+
+    with patch(
+        "retroarch_overlay.presentation.qt.plugin_manager_window.QFileDialog.getOpenFileName",
+        side_effect=((str(rom), ""), (str(save), "")),
+    ):
+        window.browse_rom()
+        window.browse_save()
+
+    assert settings.rom_path("org.example.alpha") == rom.resolve()
+    assert settings.save_path("org.example.alpha") == save.resolve()
+
+
+def test_diagnostic_checkbox_persists_immediately(qtbot, tmp_path: Path) -> None:
+    _write_plugin(tmp_path, "Alpha", "org.example.alpha", "alpha")
+    settings = LocalPluginSettings(tmp_path / "settings.json")
+    window = QtPluginManagerWindow(
+        plugin_root=tmp_path,
+        settings=settings,
+        auto_load_catalog=False,
+    )
+    qtbot.addWidget(window)
+    window.installed_table.selectRow(0)
+
+    assert not settings.plugin_diagnostics("org.example.alpha")
+    window.diagnostics_enabled.setChecked(True)
+    assert settings.plugin_diagnostics("org.example.alpha")
+    window.diagnostics_enabled.setChecked(False)
+    assert not settings.plugin_diagnostics("org.example.alpha")
 
 
 def test_ra_discovery_uses_local_hashes_and_refreshes_manifest(
