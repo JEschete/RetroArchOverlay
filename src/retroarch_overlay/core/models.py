@@ -156,6 +156,9 @@ class MapWaypoint:
     kind: str = "point"
     completed: bool | None = False
     marker: str = ""
+    # A sprite to draw in place of the marker glyph, for plugins that can decode
+    # the real actor graphics out of the cartridge.
+    image_path: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)

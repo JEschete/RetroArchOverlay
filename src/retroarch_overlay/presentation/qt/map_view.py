@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, QTimer, Qt
 from PySide6.QtGui import (
@@ -159,6 +160,7 @@ class QtMapView(QGraphicsView):
     PATH_INCREMENT_LIMIT = 128
     OBJECTIVE_FLASH_INTERVAL_MS = 450
     PLAYER_BLINK_INTERVAL_MS = 450
+    WAYPOINT_SPRITE_CACHE_ENTRIES = 64
     HIDDEN_OVERLAYS = frozenset(("path", "collectibles", "npcs", "encounters"))
 
     def __init__(
@@ -195,6 +197,7 @@ class QtMapView(QGraphicsView):
         self._overlays: dict[str, tuple[MapWaypoint, ...]] = {}
         self._overlay_signature: tuple[MapOverlay, ...] = ()
         self._pixmap: QPixmap | None = None
+        self._waypoint_sprites: OrderedDict[str, QPixmap] = OrderedDict()
         self._image_items: list[QGraphicsPixmapItem] = []
         self._static_items: list[QGraphicsItem] = []
         self._overlay_items: list[QGraphicsItem] = []
@@ -653,6 +656,23 @@ class QtMapView(QGraphicsView):
         self._sync_objective_timer()
         self._apply_item_visibility()
 
+    def _waypoint_sprite(self, path: Path) -> QPixmap | None:
+        """The waypoint's own artwork, or None when it cannot be read.
+
+        Plugins name these files after the art they hold, so a cached pixmap
+        never goes stale and overlay rebuilds stay off the disk.
+        """
+        key = str(path)
+        pixmap = self._waypoint_sprites.pop(key, None)
+        if pixmap is None:
+            pixmap = QPixmap(key)
+            if pixmap.isNull():
+                return None
+        self._waypoint_sprites[key] = pixmap
+        while len(self._waypoint_sprites) > self.WAYPOINT_SPRITE_CACHE_ENTRIES:
+            self._waypoint_sprites.popitem(last=False)
+        return pixmap
+
     def _create_waypoint_items(
         self,
         layer: MapLayer,
@@ -696,6 +716,12 @@ class QtMapView(QGraphicsView):
                     QColor("#bb3e2f"),
                 )
                 item.setData(1, "objective")
+            elif waypoint.image_path is not None and (
+                sprite := self._waypoint_sprite(waypoint.image_path)
+            ) is not None:
+                item = self._map_scene.addPixmap(sprite)
+                item.setOffset(-sprite.width() / 2, -sprite.height() / 2)
+                item.setData(1, "bitmap")
             elif not uses_marker_glyph(waypoint):
                 item = self._map_scene.addEllipse(
                     -4,
